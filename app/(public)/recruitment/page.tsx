@@ -10,14 +10,16 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { toast } from 'sonner'
 import { useState } from 'react'
 import { Truck, Send } from 'lucide-react'
+import type { z } from 'zod'
 
 export default function RecruitmentPage() {
   const [loading, setLoading] = useState(false)
-  const { register, handleSubmit, formState: { errors }, reset, setValue, watch } = useForm<RecruitmentForm>({
+  const { register, handleSubmit, formState: { errors }, reset, setValue, watch } =
+  useForm({
     resolver: zodResolver(recruitmentSchema),
   })
 
-  async function onSubmit(data: RecruitmentForm) {
+  async function onSubmit(data: z.infer<typeof recruitmentSchema>) {
     setLoading(true)
     try {
       const res = await fetch('/api/recruitment', {
