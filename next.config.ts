@@ -1,7 +1,13 @@
-import type { NextConfig } from "next";
-
-const nextConfig: NextConfig = {
-  /* config options here */
-};
-
-export default nextConfig;
+const nextConfig = {
+  async headers() {
+    return [
+      {
+        source: '/map/:path*',
+        headers: [
+          { key: 'Cache-Control', value: 'public, max-age=86400' },
+        ],
+      },
+    ]
+  },
+}
+export default nextConfig

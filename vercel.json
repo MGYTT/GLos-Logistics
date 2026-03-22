@@ -1,0 +1,7 @@
+{
+  "crons": [
+    { "path": "/api/cron/weekly-bonuses", "schedule": "0 12 * * 1" },
+    { "path": "/api/cron/fuel-price",     "schedule": "0 8 * * 1"  },
+    { "path": "/api/cron/bank-check",     "schedule": "0 6 * * *"  }
+  ]
+}

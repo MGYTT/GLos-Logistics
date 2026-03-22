@@ -1,0 +1,17 @@
+{
+  "name": "vtc-bridge",
+  "version": "1.0.0",
+  "description": "ETS2/ATS → VTC Panel bridge",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev":   "VTC_API_KEY=twój-klucz DEBUG=true node index.js"
+  },
+  "dependencies": {
+    "node-fetch": "^2.7.0",
+    "scs-telemetry-data": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
