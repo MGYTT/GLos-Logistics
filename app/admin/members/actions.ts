@@ -1,11 +1,18 @@
 'use server'
 
-import { createClient }        from '@/lib/supabase/server'
-import { revalidatePath }      from 'next/cache'
-import { syncDiscordRole }     from '@/lib/discord/roles'
+import { createClient }      from '@/lib/supabase/server'
+import { revalidatePath }    from 'next/cache'
+import { syncDiscordRole }   from '@/lib/discord/roles'
 import { sendRankUpWebhook, sendBanWebhook } from '@/lib/discord/webhooks'
 
-async function requireAdmin() {
+// ─── Typy ─────────────────────────────────────
+interface AdminContext {
+  supabase: Awaited<ReturnType<typeof createClient>>
+  admin:    { rank: string; username: string }   // ← nie null
+}
+
+// ─── Guard ────────────────────────────────────
+async function requireAdmin(): Promise<AdminContext> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) throw new Error('Nie jesteś zalogowany')
@@ -16,17 +23,21 @@ async function requireAdmin() {
     .eq('id', user.id)
     .single()
 
-  if (!['Owner', 'Manager'].includes(admin?.rank ?? '')) {
+  // Najpierw sprawdź null — potem uprawnienia
+  if (!admin) throw new Error('Nie znaleziono konta')
+
+  if (!['Owner', 'Manager'].includes(admin.rank)) {
     throw new Error('Brak uprawnień')
   }
 
+  // Tu TypeScript już wie że admin !== null
   return { supabase, admin }
 }
 
+// ─── Zmiana rangi ─────────────────────────────
 export async function changeMemberRank(memberId: string, newRank: string) {
   const { supabase, admin } = await requireAdmin()
 
-  // Pobierz dane członka przed zmianą
   const { data: member } = await supabase
     .from('members')
     .select('rank, username, avatar_url, discord_id')
@@ -35,9 +46,14 @@ export async function changeMemberRank(memberId: string, newRank: string) {
 
   if (!member) throw new Error('Nie znaleziono członka')
 
-  // Właściciel nie może być zdegradowany przez Managera
+  // Manager nie może zmieniać rangi Ownera
   if (member.rank === 'Owner' && admin.rank !== 'Owner') {
     throw new Error('Brak uprawnień do zmiany rangi Ownera')
+  }
+
+  // Nie można nadać rangi Owner przez panel
+  if (newRank === 'Owner' && admin.rank !== 'Owner') {
+    throw new Error('Tylko Owner może nadawać rangę Owner')
   }
 
   const { error } = await supabase
@@ -47,7 +63,6 @@ export async function changeMemberRank(memberId: string, newRank: string) {
 
   if (error) throw new Error(`Błąd zmiany rangi: ${error.message}`)
 
-  // ── Discord: rola + webhook ─────────────────
   await Promise.all([
     member.discord_id
       ? syncDiscordRole({
@@ -69,6 +84,7 @@ export async function changeMemberRank(memberId: string, newRank: string) {
   revalidatePath('/hub/profile')
 }
 
+// ─── Ban ──────────────────────────────────────
 export async function banMember(memberId: string, reason?: string) {
   const { supabase, admin } = await requireAdmin()
 
@@ -78,8 +94,11 @@ export async function banMember(memberId: string, reason?: string) {
     .eq('id', memberId)
     .single()
 
-  if (!member) throw new Error('Nie znaleziono członka')
-  if (member.rank === 'Owner') throw new Error('Nie można zbanować Ownera')
+  if (!member)                   throw new Error('Nie znaleziono członka')
+  if (member.rank === 'Owner')   throw new Error('Nie można zbanować Ownera')
+  if (memberId === (await (await createClient()).auth.getUser()).data.user?.id) {
+    throw new Error('Nie możesz zbanować samego siebie')
+  }
 
   const { error } = await supabase
     .from('members')
@@ -98,6 +117,7 @@ export async function banMember(memberId: string, reason?: string) {
   revalidatePath('/admin/members')
 }
 
+// ─── Unban ────────────────────────────────────
 export async function unbanMember(memberId: string) {
   const { supabase, admin } = await requireAdmin()
 
