@@ -80,15 +80,15 @@ export function RichEditor({ value, onChange }: Props) {
   })
 
   const addLink = useCallback(() => {
-    if (!editor) return
-    const prev = editor.getAttributes('link').href ?? ''
-    const url  = window.prompt('URL:', prev)
-    if (url === null) return
-    url === ''
-      ? editor.chain().focus().extendMarkToLink().unsetLink().run()
-      : editor.chain().focus().extendMarkToLink()
-          .setLink({ href: url, target: '_blank' }).run()
-  }, [editor])
+  if (!editor) return
+  const prev = editor.getAttributes('link').href ?? ''
+  const url  = window.prompt('URL:', prev)
+  if (url === null) return
+  url === ''
+    ? editor.chain().focus().extendMarkRange('link').unsetLink().run()
+    : editor.chain().focus().extendMarkRange('link')
+        .setLink({ href: url, target: '_blank' }).run()
+}, [editor])
 
   const addImage = useCallback(() => {
     if (!editor) return
