@@ -1,48 +1,13 @@
 'use client'
-import dynamic from 'next/dynamic'
 
-const ResponsiveContainer = dynamic(
-  () => import('recharts').then(m => ({ default: m.ResponsiveContainer })),
-  { ssr: false }
-)
-const AreaChart = dynamic(
-  () => import('recharts').then(m => ({ default: m.AreaChart })),
-  { ssr: false }
-)
-const Area = dynamic(
-  () => import('recharts').then(m => ({ default: m.Area })),
-  { ssr: false }
-)
-const BarChart = dynamic(
-  () => import('recharts').then(m => ({ default: m.BarChart })),
-  { ssr: false }
-)
-const Bar = dynamic(
-  () => import('recharts').then(m => ({ default: m.Bar })),
-  { ssr: false }
-)
-const XAxis = dynamic(
-  () => import('recharts').then(m => ({ default: m.XAxis })),
-  { ssr: false }
-)
-const YAxis = dynamic(
-  () => import('recharts').then(m => ({ default: m.YAxis })),
-  { ssr: false }
-)
-const Tooltip = dynamic(
-  () => import('recharts').then(m => ({ default: m.Tooltip })),
-  { ssr: false }
-)
-const CartesianGrid = dynamic(
-  () => import('recharts').then(m => ({ default: m.CartesianGrid })),
-  { ssr: false }
-)
+import { useEffect, useState } from 'react'
+import type * as RechartsTypes from 'recharts'
 
 interface DayData {
-  date: string
-  km: number
+  date:   string
+  km:     number
   income: number
-  jobs: number
+  jobs:   number
 }
 
 interface Props {
@@ -51,29 +16,52 @@ interface Props {
 
 const tooltipStyle = {
   contentStyle: {
-    background: '#18181b',
-    border: '1px solid #27272a',
+    background:   '#18181b',
+    border:       '1px solid #27272a',
     borderRadius: 8,
-    color: '#fff',
-    fontSize: 12,
+    color:        '#fff',
+    fontSize:     12,
   },
   labelStyle: { color: '#71717a', marginBottom: 4 },
-  cursor: { fill: 'rgba(255,255,255,0.03)' },
+  cursor:     { fill: 'rgba(255,255,255,0.03)' },
+}
+
+function Skeleton() {
+  return (
+    <div className="space-y-6">
+      {[1, 2, 3].map(i => (
+        <div key={i} className="glass rounded-xl p-5 h-72 animate-pulse bg-zinc-800/30" />
+      ))}
+    </div>
+  )
 }
 
 export function StatsCharts({ data }: Props) {
+  const [RC, setRC] = useState<typeof RechartsTypes | null>(null)
+
+  useEffect(() => {
+    import('recharts').then(mod => setRC(mod))
+  }, [])
+
   const formatted = data.map(d => ({
     ...d,
     dateLabel: new Date(d.date).toLocaleDateString('pl-PL', {
-      day: '2-digit',
+      day:   '2-digit',
       month: '2-digit',
     }),
   }))
 
-  // Sumy do nagłówków
-  const totalKm     = data.reduce((s, d) => s + d.km, 0)
+  const totalKm     = data.reduce((s, d) => s + d.km,    0)
   const totalIncome = data.reduce((s, d) => s + d.income, 0)
-  const totalJobs   = data.reduce((s, d) => s + d.jobs, 0)
+  const totalJobs   = data.reduce((s, d) => s + d.jobs,   0)
+
+  if (!RC) return <Skeleton />
+
+  const {
+    ResponsiveContainer, AreaChart, Area,
+    BarChart, Bar, XAxis, YAxis,
+    Tooltip, CartesianGrid,
+  } = RC
 
   return (
     <div className="space-y-6">
