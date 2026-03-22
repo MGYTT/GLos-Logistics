@@ -19,8 +19,22 @@ export interface THWebSocketMessage {
   data: any
 }
 
-// Konwersja współrzędnych ETS2 → Leaflet
-// ETS2 world: X [-16000, 16000], Z [-16000, 16000]
+// ─── Nowy interfejs ───────────────────────────
+export interface THJobWebhook {
+  id:               string
+  driver_uuid:      string
+  cargo:            string | null
+  source_city:      string | null
+  destination_city: string | null
+  distance:         number
+  income:           number
+  fuel_used:        number | null
+  cargo_damage:     number
+  truck:            string | null
+  completed_at:     string
+}
+
+// ─── Helpers ──────────────────────────────────
 export function ets2ToLatLng(x: number, z: number): [number, number] {
   const lat = -(z / 16000) * 90
   const lng =  (x / 16000) * 180
