@@ -1,25 +1,10 @@
 'use client'
-import dynamic from 'next/dynamic'
-import { Member, WeekStats, Job } from '@/types'
-import { useMemo } from 'react'
-import { subDays, format, startOfDay, isSameDay } from 'date-fns'
-import { pl } from 'date-fns/locale'
 
-const ResponsiveContainer = dynamic(
-  () => import('recharts').then(m => ({ default: m.ResponsiveContainer })), { ssr: false }
-)
-const AreaChart = dynamic(
-  () => import('recharts').then(m => ({ default: m.AreaChart })), { ssr: false }
-)
-const Area = dynamic(
-  () => import('recharts').then(m => ({ default: m.Area })), { ssr: false }
-)
-const XAxis = dynamic(
-  () => import('recharts').then(m => ({ default: m.XAxis })), { ssr: false }
-)
-const Tooltip = dynamic(
-  () => import('recharts').then(m => ({ default: m.Tooltip })), { ssr: false }
-)
+import { useMemo, useEffect, useState } from 'react'
+import { subDays, format, isSameDay }   from 'date-fns'
+import { pl }                           from 'date-fns/locale'
+import type * as RechartsTypes          from 'recharts'
+import type { Member, WeekStats, Job }  from '@/types'
 
 interface Props {
   member:    Member
@@ -28,7 +13,12 @@ interface Props {
 }
 
 export function WeeklyProgress({ weekStats, jobs }: Props) {
-  // Generuj ostatnie 7 dni z prawdziwymi danymi
+  const [RC, setRC] = useState<typeof RechartsTypes | null>(null)
+
+  useEffect(() => {
+    import('recharts').then(setRC)
+  }, [])
+
   const chartData = useMemo(() => {
     return Array.from({ length: 7 }).map((_, i) => {
       const date    = subDays(new Date(), 6 - i)
@@ -37,7 +27,7 @@ export function WeeklyProgress({ weekStats, jobs }: Props) {
       )
       const km = dayJobs.reduce((s, j) => s + (j.distance_km ?? 0), 0)
       return {
-        day: format(date, 'EEE', { locale: pl }),
+        day:  format(date, 'EEE', { locale: pl }),
         km,
         jobs: dayJobs.length,
       }
@@ -61,63 +51,63 @@ export function WeeklyProgress({ weekStats, jobs }: Props) {
 
       {/* Wykres */}
       <div className="h-36">
-        {hasData ? (
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={chartData}
-              margin={{ top: 5, right: 5, left: -30, bottom: 0 }}>
-              <defs>
-                <linearGradient id="gradKm" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%"  stopColor="#f59e0b" stopOpacity={0.35} />
-                  <stop offset="95%" stopColor="#f59e0b" stopOpacity={0}    />
-                </linearGradient>
-              </defs>
-              <XAxis
-                dataKey="day"
-                tick={{ fill: '#52525b', fontSize: 11 }}
-                axisLine={false}
-                tickLine={false}
-              />
-              <Tooltip
-                contentStyle={{
-                  background: '#18181b',
-                  border: '1px solid #27272a',
-                  borderRadius: 8,
-                  color: '#fff',
-                  fontSize: 12,
-                  padding: '6px 10px',
-                }}
-                formatter={(v: number, name: string) =>
-                  name === 'km' ? [`${v} km`, 'Dystans'] : [v, 'Joby']
-                }
-                cursor={{
-                  stroke: '#f59e0b44',
-                  strokeWidth: 1,
-                }}
-              />
-              <Area
-                type="monotone"
-                dataKey="km"
-                stroke="#f59e0b"
-                strokeWidth={2}
-                fill="url(#gradKm)"
-                dot={false}
-                activeDot={{
-                  r: 4,
-                  fill: '#f59e0b',
-                  stroke: '#18181b',
-                  strokeWidth: 2,
-                }}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-        ) : (
-          /* Pusty state wykresu */
+        {!RC ? (
+          <div className="h-full animate-pulse bg-zinc-800/30 rounded-lg" />
+        ) : !hasData ? (
           <div className="h-full flex flex-col items-center justify-center">
             <div className="w-full h-1 bg-zinc-800/60 rounded-full" />
             <p className="text-zinc-700 text-xs mt-4">
               Brak danych — jedź pierwszego joba!
             </p>
           </div>
+        ) : (
+          (() => {
+            const { ResponsiveContainer, AreaChart, Area, XAxis, Tooltip } = RC
+            return (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart
+                  data={chartData}
+                  margin={{ top: 5, right: 5, left: -30, bottom: 0 }}
+                >
+                  <defs>
+                    <linearGradient id="gradKmW" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%"  stopColor="#f59e0b" stopOpacity={0.35} />
+                      <stop offset="95%" stopColor="#f59e0b" stopOpacity={0}    />
+                    </linearGradient>
+                  </defs>
+                  <XAxis
+                    dataKey="day"
+                    tick={{ fill: '#52525b', fontSize: 11 }}
+                    axisLine={false}
+                    tickLine={false}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      background:   '#18181b',
+                      border:       '1px solid #27272a',
+                      borderRadius: 8,
+                      color:        '#fff',
+                      fontSize:     12,
+                      padding:      '6px 10px',
+                    }}
+                    formatter={(v: number, name: string) =>
+                      name === 'km' ? [`${v} km`, 'Dystans'] : [v, 'Joby']
+                    }
+                    cursor={{ stroke: '#f59e0b44', strokeWidth: 1 }}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="km"
+                    stroke="#f59e0b"
+                    strokeWidth={2}
+                    fill="url(#gradKmW)"
+                    dot={false}
+                    activeDot={{ r: 4, fill: '#f59e0b', stroke: '#18181b', strokeWidth: 2 }}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            )
+          })()
         )}
       </div>
 
