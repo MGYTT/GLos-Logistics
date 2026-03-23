@@ -9,24 +9,23 @@ const readline = require('readline')
 // ─── Stałe ────────────────────────────────────────────────
 const CONFIG_PATH    = path.join(__dirname, 'vtc-config.json')
 const FUNBIT_URL     = 'http://localhost:25555/api/ets2/telemetry'
-const SEND_INTERVAL  = 5_000
+const SEND_INTERVAL  = 4_000
 const FUNBIT_TIMEOUT = 4_000
 const SERVER_TIMEOUT = 8_000
 
 // ─── Kolory ───────────────────────────────────────────────
 const C = {
-  reset:  '\x1b[0m',
-  green:  '\x1b[32m',
-  yellow: '\x1b[33m',
-  red:    '\x1b[31m',
-  cyan:   '\x1b[36m',
-  bold:   '\x1b[1m',
-  dim:    '\x1b[2m',
-  amber:  '\x1b[33m',
+  reset: '\x1b[0m',
+  green: '\x1b[32m',
+  yellow:'\x1b[33m',
+  red:   '\x1b[31m',
+  cyan:  '\x1b[36m',
+  bold:  '\x1b[1m',
+  dim:   '\x1b[2m',
+  amber: '\x1b[33m',
 }
 
 const ts   = () => new Date().toLocaleTimeString('pl-PL')
-const info = m  => console.log(`${C.dim}[${ts()}]${C.reset} ${C.cyan} INFO ${C.reset} ${m}`)
 const ok   = m  => console.log(`${C.dim}[${ts()}]${C.reset} ${C.green}  OK  ${C.reset} ${m}`)
 const warn = m  => console.log(`${C.dim}[${ts()}]${C.reset} ${C.yellow} WARN ${C.reset} ${m}`)
 const err  = m  => console.log(`${C.dim}[${ts()}]${C.reset} ${C.red}  ERR ${C.reset} ${m}`)
@@ -95,16 +94,17 @@ function httpGet(url) {
   })
 }
 
-// ─── Mapowanie Funbit → payload ───────────────────────────
+// ─── Budowanie payloadu ───────────────────────────────────
 function buildPayload(config, rawTelemetry, event, lastJobKey) {
   const { game, truck, job, trailer, navigation } = rawTelemetry ?? {}
 
-  const placement  = truck?.placement ?? {}
-  const speedKmh   = Math.round(Math.abs(truck?.speed ?? 0) * 3.6 * 10) / 10
-  const gameTime   = game?.time ?? null
-  const hasJob     = !!(job?.sourceCity && job?.destinationCity)
-  const jobKey     = hasJob ? `${job.sourceCity}→${job.destinationCity}` : null
-  const cargo      = trailer?.name ?? trailer?.id ?? null
+  const placement = truck?.placement ?? {}
+  const speedKmh  = Math.round(Math.abs(truck?.speed ?? 0) * 3.6 * 10) / 10
+  const gameTime  = game?.time ?? null
+  const hasJob    = !!(job?.sourceCity && job?.destinationCity)
+  const jobKey    = hasJob ? `${job.sourceCity}→${job.destinationCity}` : null
+  const cargo     = trailer?.name ?? trailer?.id ?? null
+  const income    = job?.income ?? null
 
   const distanceKm = navigation?.estimatedDistance
     ? Math.round(navigation.estimatedDistance / 100) / 10
@@ -117,8 +117,6 @@ function buildPayload(config, rawTelemetry, event, lastJobKey) {
   const jobMaxDistance = job?.plannedDistance
     ? Math.round(job.plannedDistance / 100) / 10
     : distanceKm
-
-  const income = job?.income ?? null
 
   const wearValues = [
     truck?.wearEngine, truck?.wearTransmission,
@@ -133,7 +131,6 @@ function buildPayload(config, rawTelemetry, event, lastJobKey) {
     ? Math.max(0, Math.round(truck.fuelCapacity - truck.fuel))
     : null
 
-  // ── Telemetria dla dashboardu ────────────────────────────
   const telemetryData = {
     has_job:               hasJob,
     from_city:             job?.sourceCity         ?? null,
@@ -145,24 +142,21 @@ function buildPayload(config, rawTelemetry, event, lastJobKey) {
     income,
     job_max_distance:      jobMaxDistance,
     distance_remaining_km: distanceKm,
-    eta_minutes:           etaMinutes,
+    eta_minutes:           etaMinutes != null ? Math.round(etaMinutes) : null,
     truck_brand:           truck?.make             ?? null,
     truck_model:           truck?.model            ?? null,
     fuel_liters:           truck?.fuel             ?? null,
     fuel_capacity:         truck?.fuelCapacity     ?? null,
-    odometer:              truck?.odometer
-      ? Math.round(truck.odometer / 1000)
-      : null,
-    rpm:  truck?.engineRpm ?? null,
-    gear: truck?.gear      ?? null,
+    odometer:              truck?.odometer ? Math.round(truck.odometer / 1000) : null,
+    rpm:                   truck?.engineRpm != null ? Math.round(truck.engineRpm) : null,
+    gear:                  truck?.gear      != null ? Math.round(truck.gear)      : null,
   }
 
   return {
     jobKey,
     hasJob,
-    result: {                          // ← zmieniono z 'payload' na 'result'
-      api_key: config.api_key,
-
+    result: {
+      api_key:  config.api_key,
       position: {
         x:         placement.x ?? 0,
         y:         placement.y ?? 0,
@@ -171,7 +165,6 @@ function buildPayload(config, rawTelemetry, event, lastJobKey) {
         game_time: gameTime,
         online:    true,
       },
-
       active_job: hasJob ? {
         cargo,
         origin_city:      job.sourceCity      ?? null,
@@ -181,9 +174,7 @@ function buildPayload(config, rawTelemetry, event, lastJobKey) {
         fuel_used:        null,
         damage_percent:   damagePercent,
       } : null,
-
       event,
-
       delivered_job: event === 'job_delivered' ? {
         origin_city:      lastJobKey?.split('→')[0] ?? job?.sourceCity      ?? null,
         destination_city: lastJobKey?.split('→')[1] ?? job?.destinationCity ?? null,
@@ -193,7 +184,6 @@ function buildPayload(config, rawTelemetry, event, lastJobKey) {
         fuel_used:        fuelUsed,
         damage_percent:   damagePercent,
       } : undefined,
-
       telemetry: telemetryData,
     },
   }
@@ -208,12 +198,11 @@ async function sendOffline(config) {
       active_job:    null,
       event:         'none',
       delivered_job: undefined,
-      // ← DODAJ to — bez tego upsertTelemetry nie wykona się
       telemetry: {
-        has_job:    false,
-        from_city:  null, to_city:      null,
-        from_company: null, to_company: null,
-        cargo:      null,  speed_kmh:   0,
+        has_job:      false,
+        from_city:    null, to_city:      null,
+        from_company: null, to_company:   null,
+        cargo:        null,
       },
     })
   } catch { /* ignoruj */ }
@@ -234,15 +223,11 @@ ${C.bold}${C.amber}  ╔══════════════════�
   ${C.dim}Wpisz "reset" + Enter — zmień konto${C.reset}
 `)
 
-  // ── Stdin — KLUCZOWE: resume() żeby Node nie zamknął się ─
-  // BAT przekazuje stdin który może być w stanie paused/closed
-  // bez resume() proces kończy się natychmiast po starcie
   try {
     process.stdin.resume()
     process.stdin.setEncoding('utf8')
-  } catch { /* w niektórych środowiskach stdin może być null */ }
+  } catch { /* ignoruj */ }
 
-  // ── readline do obsługi komendy "reset" ───────────────────
   let rl = null
   try {
     rl = readline.createInterface({
@@ -256,146 +241,134 @@ ${C.bold}${C.amber}  ╔══════════════════�
       console.log()
       warn('Resetuję konfigurację...')
       try { fs.unlinkSync(CONFIG_PATH) } catch {}
-      console.log()
       ok('Plik vtc-config.json usunięty.')
       warn('Zamknij to okno i uruchom START_VTC.bat ponownie.')
-      console.log()
       clearInterval(tickInterval)
       if (rl) rl.close()
       setTimeout(() => process.exit(0), 3_000)
     })
 
-    // KLUCZOWE: gdy readline zamknie stdin (EOF z BAT) — NIE wychodź
-    rl.on('close', () => {
-      // stdin zamknięty (np. BAT nie ma TTY) — kontynuuj bridge normalnie
-      // tylko loguj w trybie debug
-    })
+    rl.on('close', () => { /* stdin EOF — bridge działa dalej */ })
   } catch (e) {
-    warn(`Readline niedostępny: ${e.message} — bridge działa bez komendy reset`)
+    warn(`Readline niedostępny: ${e.message}`)
   }
 
-  // ── Stan ─────────────────────────────────────────────────
+  // ── Stan ──────────────────────────────────────────────────
   let lastJobKey      = null
-  let failCount       = 0
   let funbitOk        = false
   let consecutiveFail = 0
   let tickInterval    = null
 
-  // ── Tick ─────────────────────────────────────────────────
-async function tick() {
+  // ── Tick ──────────────────────────────────────────────────
+  async function tick() {
 
-  // 1. Funbit
-  let rawTelemetry
-  try {
-    const res = await httpGet(FUNBIT_URL)
-    if (res.status !== 200) throw new Error(`HTTP ${res.status}`)
-    rawTelemetry = res.body
+    // 1. Pobierz dane z Funbit
+    let rawTelemetry
+    try {
+      const res = await httpGet(FUNBIT_URL)
+      if (res.status !== 200) throw new Error(`HTTP ${res.status}`)
+      rawTelemetry = res.body
 
-    if (!funbitOk || consecutiveFail > 0) {
-      console.log()
-      ok('Połączono z Funbit!')
-      funbitOk        = true
-      failCount       = 0
-      consecutiveFail = 0
-    }
-  } catch (e) {
-    failCount++
-    consecutiveFail++
-    if (consecutiveFail === 1 || consecutiveFail % 12 === 0) {
-      console.log()
-      warn(`Funbit niedostępny — czekam na grę... (${e.message})`)
-    }
-    if (consecutiveFail === 3) {
-      process.stdout.write(
-        `\r  ${C.dim}[${ts()}] 🔴  Gra zamknięta lub w menu${C.reset}   `,
-      )
-      await sendOffline(config)
-    }
-    return
-  }
-
-  // 2. Sprawdź czy plugin połączony
-  const { game, truck, job } = rawTelemetry ?? {}
-
-  if (!game?.connected) {
-    consecutiveFail = 0
-    process.stdout.write(
-      `\r  ${C.dim}[${ts()}] ⏳  Oczekuję na załadowanie mapy...${C.reset}   `,
-    )
-    await sendOffline(config)
-    return
-  }
-
-  consecutiveFail = 0
-  if (!truck) return
-
-  // 3. Zdarzenia joba
-  const hasJob = !!(job?.sourceCity && job?.destinationCity)
-  const jobKey = hasJob ? `${job.sourceCity}→${job.destinationCity}` : null
-
-  let event = 'none'
-  if      (hasJob && jobKey !== lastJobKey && lastJobKey !== null) event = 'job_delivered'
-  else if (hasJob && jobKey !== lastJobKey)                        event = 'job_started'
-  else if (!hasJob && lastJobKey !== null)                         event = 'job_cancelled'
-
-  const prevKey = lastJobKey
-
-  // 4. Zbuduj payload
-  const { result } = buildPayload(config, rawTelemetry, event, prevKey)
-
-  // 5. Wyślij
-  try {
-    const res = await httpPost(`${config.server_url}/api/bridge`, result)
-
-    if (res.status === 200 && res.body?.ok) {
-      lastJobKey = hasJob ? jobKey : null
-
-      if (event !== 'none') {
-        const icons = { job_started: '🚛', job_delivered: '✅', job_cancelled: '❌' }
+      if (!funbitOk || consecutiveFail > 0) {
         console.log()
-        ok(`${icons[event]} ${event.toUpperCase().replace(/_/g, ' ')} — ${jobKey ?? prevKey}`)
+        ok('Połączono z Funbit!')
+        funbitOk        = true
+        consecutiveFail = 0
+      }
+    } catch (e) {
+      consecutiveFail++
+      if (consecutiveFail === 1 || consecutiveFail % 12 === 0) {
+        console.log()
+        warn(`Funbit niedostępny — czekam na grę... (${e.message})`)
+      }
+      if (consecutiveFail === 3) {
+        process.stdout.write(`\r  ${C.dim}[${ts()}] 🔴  Gra zamknięta lub w menu${C.reset}   `)
+        await sendOffline(config)
+      }
+      return
+    }
+
+    // 2. Sprawdź czy gra załadowana
+    const { game, truck } = rawTelemetry ?? {}
+
+    if (!game?.connected) {
+      consecutiveFail = 0
+      process.stdout.write(`\r  ${C.dim}[${ts()}] ⏳  Oczekuję na załadowanie mapy...${C.reset}   `)
+      await sendOffline(config)
+      return
+    }
+
+    consecutiveFail = 0
+    if (!truck) return
+
+    // 3. Wykryj zdarzenia joba
+    const job    = rawTelemetry?.job
+    const hasJob = !!(job?.sourceCity && job?.destinationCity)
+    const jobKey = hasJob ? `${job.sourceCity}→${job.destinationCity}` : null
+
+    let event = 'none'
+    if      (hasJob && jobKey !== lastJobKey && lastJobKey !== null) event = 'job_delivered'
+    else if (hasJob && jobKey !== lastJobKey)                        event = 'job_started'
+    else if (!hasJob && lastJobKey !== null)                         event = 'job_cancelled'
+
+    const prevKey = lastJobKey
+
+    // 4. Zbuduj i wyślij
+    const { result } = buildPayload(config, rawTelemetry, event, prevKey)
+
+    try {
+      const res = await httpPost(`${config.server_url}/api/bridge`, result)
+
+      if (res.status === 200 && res.body?.ok) {
+        lastJobKey = hasJob ? jobKey : null
+
+        if (event !== 'none') {
+          const icons = { job_started: '🚛', job_delivered: '✅', job_cancelled: '❌' }
+          console.log()
+          ok(`${icons[event]} ${event.toUpperCase().replace(/_/g, ' ')} — ${jobKey ?? prevKey}`)
+        } else {
+          process.stdout.write(
+            `\r  ${C.dim}[${ts()}] ⟳  ${
+              hasJob
+                ? `🚛 ${jobKey}  ${result.position.speed} km/h`
+                : '🅿  Brak zlecenia'
+            }${C.reset}   `,
+          )
+        }
+
+      } else if (res.status === 401) {
+        console.log()
+        err('Klucz API jest nieprawidłowy lub wygasł!')
+        warn('Wpisz "reset" + Enter aby zmienić konto.')
+
+      } else if (res.status === 403) {
+        console.log()
+        err('Konto jest zbanowane. Skontaktuj się z administracją.')
+        clearInterval(tickInterval)
+        setTimeout(() => process.exit(1), 3_000)
+
       } else {
-        process.stdout.write(
-          `\r  ${C.dim}[${ts()}] ⟳  ${
-            hasJob
-              ? `🚛 ${jobKey}  ${result.position.speed} km/h`
-              : '🅿  Brak zlecenia'
-          }${C.reset}   `,
-        )
+        const msg    = res.body?.error  ?? `HTTP ${res.status}`
+        const issues = res.body?.issues ?? []
+        console.log()
+        warn(`Serwer: ${msg}`)
+        issues.forEach(i => warn(`  ↳ [${i.path || '—'}] ${i.message}`))
       }
 
-    } else if (res.status === 401) {
+    } catch (e) {
       console.log()
-      err('Klucz API jest nieprawidłowy lub wygasł!')
-      warn('Wpisz "reset" + Enter aby zmienić konto.')
-
-    } else if (res.status === 403) {
-      console.log()
-      err('Konto jest zbanowane. Skontaktuj się z administracją.')
-      clearInterval(tickInterval)
-      setTimeout(() => process.exit(1), 3_000)
-
-    } else {
-      const msg    = res.body?.error  ?? `HTTP ${res.status}`
-      const issues = res.body?.issues ?? []
-      console.log()
-      warn(`Serwer: ${msg}`)
-      issues.forEach(i => warn(`  ↳ [${i.path || '—'}] ${i.message}`))
+      warn(`Błąd sieci: ${e.message} — retry za 2s`)
+      setTimeout(async () => {
+        try { await httpPost(`${config.server_url}/api/bridge`, result) }
+        catch { /* ignoruj retry */ }
+      }, 2_000)
     }
-
-  } catch (e) {
-    console.log()
-    warn(`Błąd sieci: ${e.message}`)
   }
-}
 
   // ── Start pętli ───────────────────────────────────────────
   await tick()
   tickInterval = setInterval(tick, SEND_INTERVAL)
 
-  // KLUCZOWE: utrzymaj proces przy życiu niezależnie od stdin
-  // setInterval sam w sobie utrzymuje event loop,
-  // ale dodajemy też unref-owany keepalive na wszelki wypadek
   const keepAlive = setInterval(() => {}, 1_000 * 60 * 60)
   keepAlive.unref()
 }
@@ -408,23 +381,18 @@ async function main() {
     console.log()
     err('Brak pliku konfiguracyjnego: vtc-config.json')
     warn('Zamknij to okno i uruchom START_VTC.bat ponownie.')
-    console.log()
     await new Promise(r => setTimeout(r, 10_000))
     process.exit(1)
   }
 
   ok(`Konfiguracja wczytana: ${C.bold}${config.username}${C.reset} [${config.rank ?? '—'}]`)
-  info(`Serwer: ${C.dim}${config.server_url}${C.reset}`)
   console.log()
 
   await startBridge(config)
 }
 
-// ─── Obsługa błędów globalnych ────────────────────────────
 process.on('uncaughtException',  e => err(`Nieoczekiwany błąd: ${e.message}`))
 process.on('unhandledRejection', e => warn(`Nieobsłużone odrzucenie: ${e?.message ?? e}`))
-
-// KLUCZOWE: ignoruj SIGTERM z BAT — nie zamykaj się przy pipe close
 process.on('SIGTERM', () => warn('SIGTERM zignorowany — bridge działa dalej'))
 
 main()

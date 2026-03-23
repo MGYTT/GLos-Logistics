@@ -10,7 +10,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils/cn'
 
-// ─── Typy ──────────────────────────────────────
+// ─── Typy ─────────────────────────────────────────────────
 interface Telemetry {
   has_job:               boolean
   from_city:             string | null
@@ -40,14 +40,18 @@ interface Props {
   initialTelemetry: Telemetry | null
 }
 
-// ─── Stałe ──────────────────────────────────────
-const ONLINE_THRESHOLD_S = 35   // 10s interval Bridge + 25s tolerancja
-const POLL_INTERVAL_MS   = 12_000 // polling fallback co 12s
+// ─── Stałe ────────────────────────────────────────────────
+const ONLINE_THRESHOLD_S = 90   // bridge co 4s, offline po 90s braku danych
+const POLL_INTERVAL_MS   = 8_000
 
-// ─── Helpers ────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────
+function ageSeconds(t: Telemetry | null): number {
+  if (!t?.updated_at) return Infinity
+  return (Date.now() - new Date(t.updated_at).getTime()) / 1000
+}
+
 function isOnline(t: Telemetry | null): boolean {
-  if (!t?.updated_at) return false
-  return (Date.now() - new Date(t.updated_at).getTime()) / 1000 < ONLINE_THRESHOLD_S
+  return ageSeconds(t) < ONLINE_THRESHOLD_S
 }
 
 function jobProgress(remaining: number | null, total: number | null): number {
@@ -72,12 +76,12 @@ function formatGameTime(str: string | null): string | null {
 
 function gearLabel(gear: number | null): string {
   if (gear == null) return '—'
-  if (gear > 0)   return `D${gear}`
-  if (gear === 0) return 'N'
+  if (gear > 0)    return `D${gear}`
+  if (gear === 0)  return 'N'
   return 'R'
 }
 
-// ─── StatTile ───────────────────────────────────
+// ─── StatTile ─────────────────────────────────────────────
 function StatTile({ icon, label, value, color, sub }: {
   icon:   React.ReactNode
   label:  string
@@ -99,18 +103,19 @@ function StatTile({ icon, label, value, color, sub }: {
   )
 }
 
-// ─── Główny komponent ───────────────────────────
+// ─── Główny komponent ─────────────────────────────────────
 export function TelemetryBanner({ memberId, initialTelemetry }: Props) {
-  const [telemetry,    setTelemetry]    = useState<Telemetry | null>(initialTelemetry)
-  const [online,       setOnline]       = useState(isOnline(initialTelemetry))
-  const [expanded,     setExpanded]     = useState(false)
-  const [realtimeOk,   setRealtimeOk]   = useState(false)   // czy WS działa
-  const [lastPollErr,  setLastPollErr]  = useState(false)
+  const [telemetry,   setTelemetry]   = useState<Telemetry | null>(initialTelemetry)
+  const [online,      setOnline]      = useState(false)   // ← zawsze false na start, fetch ustawi
+  const [expanded,    setExpanded]    = useState(false)
+  const [realtimeOk,  setRealtimeOk]  = useState(false)
+  const [lastPollErr, setLastPollErr] = useState(false)
 
-  const telRef    = useRef<Telemetry | null>(initialTelemetry)
-  const supabase  = createClient()
+  const telRef       = useRef<Telemetry | null>(initialTelemetry)
+  const pollErrCount = useRef(0)
+  const supabase     = createClient()
 
-  // ── Pobierz dane przez REST (polling fallback) ──
+  // ── Fetch danych z bazy ──────────────────────────────────
   const fetchTelemetry = useCallback(async () => {
     try {
       const { data, error } = await supabase
@@ -120,7 +125,6 @@ export function TelemetryBanner({ memberId, initialTelemetry }: Props) {
         .maybeSingle()
 
       if (error) {
-        // RLS error — zaloguj dla dewelopera
         console.warn('[TelemetryBanner] fetch error:', error.message)
         setLastPollErr(true)
         return
@@ -132,65 +136,87 @@ export function TelemetryBanner({ memberId, initialTelemetry }: Props) {
         const t = data as Telemetry
         telRef.current = t
         setTelemetry(t)
-        setOnline(isOnline(t))
+
+        const age = ageSeconds(t)
+        if (age < ONLINE_THRESHOLD_S) {
+          pollErrCount.current = 0
+          setOnline(true)
+        } else {
+          pollErrCount.current++
+          if (pollErrCount.current >= 2) setOnline(false)
+        }
       } else {
-        // Brak rekordu — Bridge nigdy nie był uruchomiony
-        setOnline(false)
+        // Brak wiersza w tabeli
+        pollErrCount.current++
+        if (pollErrCount.current >= 2) setOnline(false)
       }
     } catch (e) {
       console.warn('[TelemetryBanner] fetch exception:', e)
     }
   }, [memberId])
 
-  // ── Subskrypcja Realtime + polling fallback ──
+  // ── Realtime + polling ───────────────────────────────────
   useEffect(() => {
-  // ZAWSZE fetchuj świeże dane przy mount — nie ufaj initialTelemetry z SSR
-  // bo mogło być pobrane minuty temu
-  fetchTelemetry()
+    // Zawsze fetchuj przy mount — initialTelemetry z SSR może być stare
+    fetchTelemetry()
 
-  const channel = supabase
-    .channel(`tel_${memberId}_${Date.now()}`)
-    .on('postgres_changes', {
-      event:  '*',              // ← było UPDATE + INSERT osobno, teraz '*' łapie oba
-      schema: 'public',
-      table:  'member_telemetry',
-      filter: `member_id=eq.${memberId}`,
-    }, ({ new: updated }) => {
-      const t = updated as Telemetry
-      telRef.current = t
-      setTelemetry(t)
-      setOnline(isOnline(t))
-      setRealtimeOk(true)
-    })
-    .subscribe(status => {
-      if (status === 'SUBSCRIBED')    setRealtimeOk(true)
-      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-        setRealtimeOk(false)
+    const channel = supabase
+      .channel(`tel_${memberId}_${Date.now()}`)
+      .on(
+        'postgres_changes',
+        {
+          event:  '*',
+          schema: 'public',
+          table:  'member_telemetry',
+          filter: `member_id=eq.${memberId}`,
+        },
+        ({ new: updated }) => {
+          const t = updated as Telemetry
+          telRef.current       = t
+          pollErrCount.current = 0
+          setTelemetry(t)
+          setRealtimeOk(true)
+          setOnline(ageSeconds(t) < ONLINE_THRESHOLD_S)
+        },
+      )
+      .subscribe(status => {
+        if (status === 'SUBSCRIBED')                              setRealtimeOk(true)
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') setRealtimeOk(false)
+      })
+
+    const pollTimer = setInterval(fetchTelemetry, POLL_INTERVAL_MS)
+
+    // Co 10s sprawdź czy dane nie zestarzały się
+    const onlineTimer = setInterval(() => {
+      const age = ageSeconds(telRef.current)
+      if (age < ONLINE_THRESHOLD_S) {
+        pollErrCount.current = 0
+        setOnline(true)
+      } else {
+        pollErrCount.current++
+        if (pollErrCount.current >= 2) setOnline(false)
       }
-    })
+    }, 10_000)
 
-  const pollTimer   = setInterval(fetchTelemetry, POLL_INTERVAL_MS)
-  const onlineTimer = setInterval(() => setOnline(isOnline(telRef.current)), 5_000)
+    return () => {
+      supabase.removeChannel(channel)
+      clearInterval(pollTimer)
+      clearInterval(onlineTimer)
+    }
+  }, [memberId, fetchTelemetry])
 
-  return () => {
-    supabase.removeChannel(channel)
-    clearInterval(pollTimer)
-    clearInterval(onlineTimer)
-  }
-}, [memberId, fetchTelemetry])
-
-  // ── Obliczenia UI ─────────────────────────────
+  // ── Obliczenia UI ────────────────────────────────────────
   const t        = telemetry
   const fuelPct  = (t?.fuel_liters && t?.fuel_capacity && t.fuel_capacity > 0)
     ? Math.min(100, Math.round((t.fuel_liters / t.fuel_capacity) * 100))
     : null
-  const progress  = jobProgress(t?.distance_remaining_km ?? null, t?.job_max_distance ?? null)
-  const eta       = formatEta(t?.eta_minutes ?? null)
-  const gameTime  = formatGameTime(t?.game_time ?? null)
+  const progress = jobProgress(t?.distance_remaining_km ?? null, t?.job_max_distance ?? null)
+  const eta      = formatEta(t?.eta_minutes ?? null)
+  const gameTime = formatGameTime(t?.game_time ?? null)
   const overSpeed = (t?.speed_kmh ?? 0) > 90
   const fuelLow   = fuelPct !== null && fuelPct < 20
 
-  // ── Offline state ─────────────────────────────
+  // ── Offline UI ───────────────────────────────────────────
   if (!online) {
     return (
       <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-zinc-900/40 border border-zinc-800/60">
@@ -218,13 +244,14 @@ export function TelemetryBanner({ memberId, initialTelemetry }: Props) {
     )
   }
 
+  // ── Online UI ────────────────────────────────────────────
   return (
     <motion.div
       initial={{ opacity: 0, y: -8 }}
       animate={{ opacity: 1,  y: 0  }}
       className="relative overflow-hidden rounded-2xl border border-green-500/20 bg-zinc-900/80 backdrop-blur-sm"
     >
-      {/* Progress bar */}
+      {/* Progress bar trasy */}
       {t?.has_job && (t?.job_max_distance ?? 0) > 0 && (
         <div className="h-0.5 bg-zinc-800 w-full">
           <motion.div
@@ -239,22 +266,17 @@ export function TelemetryBanner({ memberId, initialTelemetry }: Props) {
       {/* Główna linia */}
       <div className="px-4 py-3 flex items-center gap-3 flex-wrap">
 
-        {/* Status dot */}
+        {/* Status dot + Live */}
         <div className="flex items-center gap-2 shrink-0">
           <div className="relative w-2.5 h-2.5">
             <span className="absolute inset-0 rounded-full bg-green-400 animate-ping opacity-60" />
             <span className="relative block w-2.5 h-2.5 rounded-full bg-green-400" />
           </div>
           <Truck className="w-4 h-4 text-green-400" />
-          <span className="text-xs font-black text-green-400 uppercase tracking-wider">
-            Live
-          </span>
-          {/* Realtime / polling indicator */}
+          <span className="text-xs font-black text-green-400 uppercase tracking-wider">Live</span>
           <span className={cn(
             'text-[9px] px-1.5 py-0.5 rounded-full font-medium',
-            realtimeOk
-              ? 'bg-green-500/10 text-green-600'
-              : 'bg-amber-500/10 text-amber-600'
+            realtimeOk ? 'bg-green-500/10 text-green-600' : 'bg-amber-500/10 text-amber-600',
           )}>
             {realtimeOk ? 'WS' : 'POLL'}
           </span>
@@ -294,9 +316,7 @@ export function TelemetryBanner({ memberId, initialTelemetry }: Props) {
           {/* Prędkość */}
           {t?.speed_kmh != null && (
             <div className="flex items-center gap-1.5">
-              {overSpeed && (
-                <AlertTriangle className="w-3.5 h-3.5 text-red-400 animate-pulse" />
-              )}
+              {overSpeed && <AlertTriangle className="w-3.5 h-3.5 text-red-400 animate-pulse" />}
               <Gauge className={cn('w-3.5 h-3.5', overSpeed ? 'text-red-400' : 'text-green-400')} />
               <span className={cn('text-sm font-black tabular-nums', overSpeed ? 'text-red-400' : 'text-green-400')}>
                 {t.speed_kmh}
@@ -325,9 +345,7 @@ export function TelemetryBanner({ memberId, initialTelemetry }: Props) {
                   animate={{ width: `${fuelPct}%` }}
                   transition={{ duration: 0.5 }}
                   className={cn('h-full rounded-full',
-                    fuelLow         ? 'bg-red-400' :
-                    fuelPct < 50    ? 'bg-amber-400' :
-                                      'bg-green-400'
+                    fuelLow ? 'bg-red-400' : fuelPct < 50 ? 'bg-amber-400' : 'bg-green-400',
                   )}
                 />
               </div>
@@ -360,10 +378,7 @@ export function TelemetryBanner({ memberId, initialTelemetry }: Props) {
             className="p-1 rounded-lg hover:bg-zinc-800 text-zinc-600 hover:text-zinc-300 transition-colors ml-1"
             aria-label={expanded ? 'Zwiń szczegóły' : 'Rozwiń szczegóły'}
           >
-            {expanded
-              ? <ChevronUp   className="w-3.5 h-3.5" />
-              : <ChevronDown className="w-3.5 h-3.5" />
-            }
+            {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
           </button>
         </div>
       </div>
@@ -380,7 +395,6 @@ export function TelemetryBanner({ memberId, initialTelemetry }: Props) {
             className="overflow-hidden border-t border-zinc-800/60"
           >
             <div className="px-4 py-4 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-
               {t?.cargo && (
                 <StatTile icon={<Package    className="w-3.5 h-3.5" />} label="Ładunek"
                   value={t.cargo} color="text-amber-400" />
@@ -433,7 +447,6 @@ export function TelemetryBanner({ memberId, initialTelemetry }: Props) {
                 <StatTile icon={<MapPin     className="w-3.5 h-3.5" />} label="Do firmy"
                   value={t.to_company} color="text-zinc-400" />
               )}
-
             </div>
           </motion.div>
         )}
