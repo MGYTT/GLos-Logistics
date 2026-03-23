@@ -144,69 +144,40 @@ export function TelemetryBanner({ memberId, initialTelemetry }: Props) {
 
   // ── Subskrypcja Realtime + polling fallback ──
   useEffect(() => {
-    // Natychmiastowy fetch przy montowaniu
-    fetchTelemetry()
+  // ZAWSZE fetchuj świeże dane przy mount — nie ufaj initialTelemetry z SSR
+  // bo mogło być pobrane minuty temu
+  fetchTelemetry()
 
-    // Realtime channel
-    const channel = supabase
-      .channel(`tel_${memberId}_${Date.now()}`)  // unikalny klucz — unika cache
-      .on(
-        'postgres_changes',
-        {
-          event:  'UPDATE',
-          schema: 'public',
-          table:  'member_telemetry',
-          filter: `member_id=eq.${memberId}`,
-        },
-        ({ new: updated }) => {
-          const t = updated as Telemetry
-          telRef.current = t
-          setTelemetry(t)
-          setOnline(isOnline(t))
-          setRealtimeOk(true)
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event:  'INSERT',
-          schema: 'public',
-          table:  'member_telemetry',
-          filter: `member_id=eq.${memberId}`,
-        },
-        ({ new: inserted }) => {
-          const t = inserted as Telemetry
-          telRef.current = t
-          setTelemetry(t)
-          setOnline(isOnline(t))
-          setRealtimeOk(true)
-        }
-      )
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          setRealtimeOk(true)
-        }
-        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          console.warn('[TelemetryBanner] Realtime status:', status)
-          setRealtimeOk(false)
-        }
-      })
+  const channel = supabase
+    .channel(`tel_${memberId}_${Date.now()}`)
+    .on('postgres_changes', {
+      event:  '*',              // ← było UPDATE + INSERT osobno, teraz '*' łapie oba
+      schema: 'public',
+      table:  'member_telemetry',
+      filter: `member_id=eq.${memberId}`,
+    }, ({ new: updated }) => {
+      const t = updated as Telemetry
+      telRef.current = t
+      setTelemetry(t)
+      setOnline(isOnline(t))
+      setRealtimeOk(true)
+    })
+    .subscribe(status => {
+      if (status === 'SUBSCRIBED')    setRealtimeOk(true)
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        setRealtimeOk(false)
+      }
+    })
 
-    // Polling fallback — działa zawsze (niezależnie od Realtime)
-    // Jeśli Realtime działa — i tak nie szkodzi, dane są te same
-    const pollTimer = setInterval(fetchTelemetry, POLL_INTERVAL_MS)
+  const pollTimer   = setInterval(fetchTelemetry, POLL_INTERVAL_MS)
+  const onlineTimer = setInterval(() => setOnline(isOnline(telRef.current)), 5_000)
 
-    // Sprawdzaj online status niezależnie
-    const onlineTimer = setInterval(() => {
-      setOnline(isOnline(telRef.current))
-    }, 10_000)
-
-    return () => {
-      supabase.removeChannel(channel)
-      clearInterval(pollTimer)
-      clearInterval(onlineTimer)
-    }
-  }, [memberId, fetchTelemetry])
+  return () => {
+    supabase.removeChannel(channel)
+    clearInterval(pollTimer)
+    clearInterval(onlineTimer)
+  }
+}, [memberId, fetchTelemetry])
 
   // ── Obliczenia UI ─────────────────────────────
   const t        = telemetry

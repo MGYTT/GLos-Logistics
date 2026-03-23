@@ -203,11 +203,18 @@ function buildPayload(config, rawTelemetry, event, lastJobKey) {
 async function sendOffline(config) {
   try {
     await httpPost(`${config.server_url}/api/bridge`, {
-      api_key:       config.api_key,
-      position:      { x: 0, y: 0, z: 0, speed: 0, game_time: null, online: false },
+      api_key:  config.api_key,
+      position: { x: 0, y: 0, z: 0, speed: 0, game_time: null, online: false },
       active_job:    null,
       event:         'none',
       delivered_job: undefined,
+      // ← DODAJ to — bez tego upsertTelemetry nie wykona się
+      telemetry: {
+        has_job:    false,
+        from_city:  null, to_city:      null,
+        from_company: null, to_company: null,
+        cargo:      null,  speed_kmh:   0,
+      },
     })
   } catch { /* ignoruj */ }
 }
