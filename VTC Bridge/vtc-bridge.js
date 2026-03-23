@@ -275,111 +275,112 @@ ${C.bold}${C.amber}  ╔══════════════════�
   let tickInterval    = null
 
   // ── Tick ─────────────────────────────────────────────────
-  async function tick() {
-console.log('\n[DEBUG] payload.telemetry:', JSON.stringify(payload.telemetry, null, 2))
-    // 1. Funbit
-    let telemetry
-    try {
-      const res = await httpGet(FUNBIT_URL)
-      if (res.status !== 200) throw new Error(`HTTP ${res.status}`)
-      telemetry = res.body
+async function tick() {
 
-      if (!funbitOk || consecutiveFail > 0) {
-        console.log()
-        ok('Połączono z Funbit!')
-        funbitOk        = true
-        failCount       = 0
-        consecutiveFail = 0
-      }
-    } catch (e) {
-      failCount++
-      consecutiveFail++
-      if (consecutiveFail === 1 || consecutiveFail % 12 === 0) {
-        console.log()
-        warn(`Funbit niedostępny — czekam na grę... (${e.message})`)
-      }
-      if (consecutiveFail === 3) {
-        process.stdout.write(
-          `\r  ${C.dim}[${ts()}] 🔴  Gra zamknięta lub w menu${C.reset}   `,
-        )
-        await sendOffline(config)
-      }
-      return
-    }
+  // 1. Funbit
+  let rawTelemetry
+  try {
+    const res = await httpGet(FUNBIT_URL)
+    if (res.status !== 200) throw new Error(`HTTP ${res.status}`)
+    rawTelemetry = res.body
 
-    // 2. Sprawdź czy plugin połączony
-    const { game, truck, job } = telemetry ?? {}
-
-    if (!game?.connected) {
+    if (!funbitOk || consecutiveFail > 0) {
+      console.log()
+      ok('Połączono z Funbit!')
+      funbitOk        = true
+      failCount       = 0
       consecutiveFail = 0
+    }
+  } catch (e) {
+    failCount++
+    consecutiveFail++
+    if (consecutiveFail === 1 || consecutiveFail % 12 === 0) {
+      console.log()
+      warn(`Funbit niedostępny — czekam na grę... (${e.message})`)
+    }
+    if (consecutiveFail === 3) {
       process.stdout.write(
-        `\r  ${C.dim}[${ts()}] ⏳  Oczekuję na załadowanie mapy...${C.reset}   `,
+        `\r  ${C.dim}[${ts()}] 🔴  Gra zamknięta lub w menu${C.reset}   `,
       )
       await sendOffline(config)
-      return
     }
+    return
+  }
 
+  // 2. Sprawdź czy plugin połączony
+  const { game, truck, job } = rawTelemetry ?? {}
+
+  if (!game?.connected) {
     consecutiveFail = 0
-    if (!truck) return
+    process.stdout.write(
+      `\r  ${C.dim}[${ts()}] ⏳  Oczekuję na załadowanie mapy...${C.reset}   `,
+    )
+    await sendOffline(config)
+    return
+  }
 
-    // 3. Zdarzenia joba
-    const hasJob = !!(job?.sourceCity && job?.destinationCity)
-    const jobKey = hasJob ? `${job.sourceCity}→${job.destinationCity}` : null
+  consecutiveFail = 0
+  if (!truck) return
 
-    let event = 'none'
-    if      (hasJob && jobKey !== lastJobKey && lastJobKey !== null) event = 'job_delivered'
-    else if (hasJob && jobKey !== lastJobKey)                        event = 'job_started'
-    else if (!hasJob && lastJobKey !== null)                         event = 'job_cancelled'
+  // 3. Zdarzenia joba
+  const hasJob = !!(job?.sourceCity && job?.destinationCity)
+  const jobKey = hasJob ? `${job.sourceCity}→${job.destinationCity}` : null
 
-    const prevKey = lastJobKey
+  let event = 'none'
+  if      (hasJob && jobKey !== lastJobKey && lastJobKey !== null) event = 'job_delivered'
+  else if (hasJob && jobKey !== lastJobKey)                        event = 'job_started'
+  else if (!hasJob && lastJobKey !== null)                         event = 'job_cancelled'
 
-    // 4. Payload
-    const { result } = buildPayload(config, telemetry, event, prevKey)
-    // 5. Wyślij
-    try {
-      const res = await httpPost(`${config.server_url}/api/bridge`, result)
+  const prevKey = lastJobKey
 
-      if (res.status === 200 && res.body?.ok) {
-        lastJobKey = hasJob ? jobKey : null
+  // 4. Zbuduj payload
+  const { result } = buildPayload(config, rawTelemetry, event, prevKey)
 
-        if (event !== 'none') {
-          const icons = { job_started: '🚛', job_delivered: '✅', job_cancelled: '❌' }
-          console.log()
-          ok(`${icons[event]} ${event.toUpperCase().replace(/_/g, ' ')} — ${jobKey ?? prevKey}`)
-        } else {
-          process.stdout.write(
-            `\r  ${C.dim}[${ts()}] ⟳  ${
-              hasJob
-                ? `🚛 ${jobKey}  ${result.position.speed} km/h`
-                : '🅿  Brak zlecenia'
-            }${C.reset}   `,
-          )
-        }
+  // 5. Wyślij
+  try {
+    const res = await httpPost(`${config.server_url}/api/bridge`, result)
 
-      } else if (res.status === 401) {
+    if (res.status === 200 && res.body?.ok) {
+      lastJobKey = hasJob ? jobKey : null
+
+      if (event !== 'none') {
+        const icons = { job_started: '🚛', job_delivered: '✅', job_cancelled: '❌' }
         console.log()
-        err('Klucz API jest nieprawidłowy lub wygasł!')
-        warn('Wpisz "reset" + Enter aby zmienić konto.')
-
-      } else if (res.status === 403) {
-        console.log()
-        err('Konto jest zbanowane. Skontaktuj się z administracją.')
-        clearInterval(tickInterval)
-        setTimeout(() => process.exit(1), 3_000)
-
+        ok(`${icons[event]} ${event.toUpperCase().replace(/_/g, ' ')} — ${jobKey ?? prevKey}`)
       } else {
-        const msg    = res.body?.error  ?? `HTTP ${res.status}`
-        const issues = res.body?.issues ?? []
-        console.log()
-        warn(`Serwer: ${msg}`)
-        issues.forEach(i => warn(`  ↳ [${i.path || '—'}] ${i.message}`))
+        process.stdout.write(
+          `\r  ${C.dim}[${ts()}] ⟳  ${
+            hasJob
+              ? `🚛 ${jobKey}  ${result.position.speed} km/h`
+              : '🅿  Brak zlecenia'
+          }${C.reset}   `,
+        )
       }
 
-    } catch (e) {
+    } else if (res.status === 401) {
       console.log()
-      warn(`Błąd sieci: ${e.message}`)
+      err('Klucz API jest nieprawidłowy lub wygasł!')
+      warn('Wpisz "reset" + Enter aby zmienić konto.')
+
+    } else if (res.status === 403) {
+      console.log()
+      err('Konto jest zbanowane. Skontaktuj się z administracją.')
+      clearInterval(tickInterval)
+      setTimeout(() => process.exit(1), 3_000)
+
+    } else {
+      const msg    = res.body?.error  ?? `HTTP ${res.status}`
+      const issues = res.body?.issues ?? []
+      console.log()
+      warn(`Serwer: ${msg}`)
+      issues.forEach(i => warn(`  ↳ [${i.path || '—'}] ${i.message}`))
     }
+
+  } catch (e) {
+    console.log()
+    warn(`Błąd sieci: ${e.message}`)
   }
+}
 
   // ── Start pętli ───────────────────────────────────────────
   await tick()
