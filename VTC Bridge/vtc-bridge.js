@@ -10,7 +10,7 @@ const readline = require('readline')
 const CONFIG_PATH    = path.join(__dirname, 'vtc-config.json')
 const FUNBIT_URL     = 'http://localhost:25555/api/ets2/telemetry'
 const SEND_INTERVAL  = 5_000
-const FUNBIT_TIMEOUT = 4_000   // ← było 5000, zmniejsz poniżej SEND_INTERVAL
+const FUNBIT_TIMEOUT = 4_000
 const SERVER_TIMEOUT = 8_000
 
 // ─── Kolory ───────────────────────────────────────────────
@@ -60,7 +60,7 @@ function httpPost(url, body) {
           'Content-Type':   'application/json',
           'Content-Length': Buffer.byteLength(payload),
         },
-        timeout: 8_000,
+        timeout: SERVER_TIMEOUT,
       },
       res => {
         let d = ''
@@ -96,65 +96,33 @@ function httpGet(url) {
 }
 
 // ─── Mapowanie Funbit → payload ───────────────────────────
-//
-//  Funbit API — rzeczywiste pola:
-//  • Pozycja:   truck.placement.x / .y / .z  (NIE worldX/Y/Z)
-//  • Prędkość:  truck.speed  [m/s]  → mnożymy × 3.6 → km/h
-//  • Czas gry:  game.time  [ISO string, np. "2026-03-23T21:41:05.000Z"]
-//  • Cargo:     trailer.name ?? trailer.id  (NIE job.cargo)
-//  • Dystans:   navigation.estimatedDistance [metry] → dzielimy / 1000 → km
-//  • Paliwo:    truck.fuelCapacity - truck.fuel
-//  • Zużycie:   truck.wearEngine (0–1) → × 100 → %
-//
 function buildPayload(config, telemetry, event, lastJobKey) {
   const { game, truck, job, trailer, navigation } = telemetry ?? {}
 
-  // ── Pozycja ──────────────────────────────────────────────
-  const placement = truck?.placement ?? {}
-  const x         = placement.x ?? 0
-  const y         = placement.y ?? 0
-  const z         = placement.z ?? 0
-
-  // Funbit zwraca m/s (może być ujemna przy jeździe wstecz)
-  const speedKmh  = Math.round(Math.abs(truck?.speed ?? 0) * 3.6 * 10) / 10
-
-  // game.time to pełny ISO string — nie skracamy
-  const gameTime  = game?.time ?? null
-
-  // ── Job ──────────────────────────────────────────────────
-  const hasJob = !!(job?.sourceCity && job?.destinationCity)
-  const jobKey = hasJob ? `${job.sourceCity}→${job.destinationCity}` : null
-
-  // Cargo z trailera (Funbit nie daje job.cargo)
-  const cargo = trailer?.name ?? trailer?.id ?? null
-
-  // Dystans z nawigacji: metry → km
-  const distanceKm = navigation?.estimatedDistance
+  const placement    = truck?.placement ?? {}
+  const speedKmh     = Math.round(Math.abs(truck?.speed ?? 0) * 3.6 * 10) / 10
+  const gameTime     = game?.time ?? null
+  const hasJob       = !!(job?.sourceCity && job?.destinationCity)
+  const jobKey       = hasJob ? `${job.sourceCity}→${job.destinationCity}` : null
+  const cargo        = trailer?.name ?? trailer?.id ?? null
+  const distanceKm   = navigation?.estimatedDistance
     ? Math.round(navigation.estimatedDistance / 100) / 10
     : null
+  const income       = job?.income ?? null
 
-  // Income z job (waluta gry)
-  const income = job?.income ?? null
-
-  // ── Damage ───────────────────────────────────────────────
-  const wearValues = [
-    truck?.wearEngine,
-    truck?.wearTransmission,
-    truck?.wearCabin,
-    truck?.wearChassis,
-    truck?.wearWheels,
+  const wearValues   = [
+    truck?.wearEngine, truck?.wearTransmission,
+    truck?.wearCabin,  truck?.wearChassis, truck?.wearWheels,
   ].filter(v => v != null)
 
   const damagePercent = wearValues.length > 0
     ? Math.round(wearValues.reduce((s, v) => s + v, 0) / wearValues.length * 100)
     : 0
 
-  // ── Zużycie paliwa (do delivered_job) ────────────────────
   const fuelUsed = (truck?.fuelCapacity && truck?.fuel != null)
     ? Math.max(0, Math.round(truck.fuelCapacity - truck.fuel))
     : null
 
-  // ── Payload ──────────────────────────────────────────────
   return {
     jobKey,
     hasJob,
@@ -162,9 +130,9 @@ function buildPayload(config, telemetry, event, lastJobKey) {
       api_key: config.api_key,
 
       position: {
-        x,
-        y,
-        z,
+        x:         placement.x  ?? 0,
+        y:         placement.y  ?? 0,
+        z:         placement.z  ?? 0,
         speed:     speedKmh,
         game_time: gameTime,
         online:    true,
@@ -182,8 +150,6 @@ function buildPayload(config, telemetry, event, lastJobKey) {
 
       event,
 
-      // delivered_job wysyłamy tylko gdy event === 'job_delivered'
-      // używamy lastJobKey żeby mieć poprawne miasto (przed resetem)
       delivered_job: event === 'job_delivered' ? {
         origin_city:      lastJobKey?.split('→')[0] ?? job?.sourceCity      ?? null,
         destination_city: lastJobKey?.split('→')[1] ?? job?.destinationCity ?? null,
@@ -195,6 +161,19 @@ function buildPayload(config, telemetry, event, lastJobKey) {
       } : undefined,
     },
   }
+}
+
+// ─── Wyślij offline ───────────────────────────────────────
+async function sendOffline(config) {
+  try {
+    await httpPost(`${config.server_url}/api/bridge`, {
+      api_key:       config.api_key,
+      position:      { x: 0, y: 0, z: 0, speed: 0, game_time: null, online: false },
+      active_job:    null,
+      event:         'none',
+      delivered_job: undefined,
+    })
+  } catch { /* ignoruj */ }
 }
 
 // ─── Bridge loop ──────────────────────────────────────────
@@ -212,56 +191,63 @@ ${C.bold}${C.amber}  ╔══════════════════�
   ${C.dim}Wpisz "reset" + Enter — zmień konto${C.reset}
 `)
 
-  const rl = readline.createInterface({
-    input: process.stdin, output: process.stdout, terminal: false,
-  })
+  // ── Stdin — KLUCZOWE: resume() żeby Node nie zamknął się ─
+  // BAT przekazuje stdin który może być w stanie paused/closed
+  // bez resume() proces kończy się natychmiast po starcie
+  try {
+    process.stdin.resume()
+    process.stdin.setEncoding('utf8')
+  } catch { /* w niektórych środowiskach stdin może być null */ }
 
-  rl.on('line', line => {
-    if (line.trim().toLowerCase() !== 'reset') return
-    console.log()
-    warn('Resetuję konfigurację...')
-    try { fs.unlinkSync(CONFIG_PATH) } catch {}
-    console.log()
-    ok('Plik vtc-config.json usunięty.')
-    warn('Zamknij to okno i uruchom START_VTC.bat ponownie.')
-    console.log()
-    clearInterval(tickInterval)
-    rl.close()
-    setTimeout(() => process.exit(0), 3_000)
-  })
+  // ── readline do obsługi komendy "reset" ───────────────────
+  let rl = null
+  try {
+    rl = readline.createInterface({
+      input:    process.stdin,
+      output:   process.stdout,
+      terminal: false,
+    })
 
+    rl.on('line', line => {
+      if (line.trim().toLowerCase() !== 'reset') return
+      console.log()
+      warn('Resetuję konfigurację...')
+      try { fs.unlinkSync(CONFIG_PATH) } catch {}
+      console.log()
+      ok('Plik vtc-config.json usunięty.')
+      warn('Zamknij to okno i uruchom START_VTC.bat ponownie.')
+      console.log()
+      clearInterval(tickInterval)
+      if (rl) rl.close()
+      setTimeout(() => process.exit(0), 3_000)
+    })
+
+    // KLUCZOWE: gdy readline zamknie stdin (EOF z BAT) — NIE wychodź
+    rl.on('close', () => {
+      // stdin zamknięty (np. BAT nie ma TTY) — kontynuuj bridge normalnie
+      // tylko loguj w trybie debug
+    })
+  } catch (e) {
+    warn(`Readline niedostępny: ${e.message} — bridge działa bez komendy reset`)
+  }
+
+  // ── Stan ─────────────────────────────────────────────────
   let lastJobKey      = null
   let failCount       = 0
   let funbitOk        = false
-  let tickInterval    = null
-  // Ile razy z rzędu Funbit nie odpowiedział
   let consecutiveFail = 0
+  let tickInterval    = null
 
-  async function sendOffline() {
-    // Powiadom serwer że kierowca jest offline (gra zamknięta / menu)
-    try {
-      await httpPost(`${config.server_url}/api/bridge`, {
-        api_key:  config.api_key,
-        position: { x: 0, y: 0, z: 0, speed: 0, game_time: null, online: false },
-        active_job:    null,
-        event:         'none',
-        delivered_job: undefined,
-      })
-    } catch {
-      // Ignoruj błędy wysyłania offline — nie ważne
-    }
-  }
-
+  // ── Tick ─────────────────────────────────────────────────
   async function tick() {
 
-    // 1. Pobierz telemetrię z Funbit
+    // 1. Funbit
     let telemetry
     try {
       const res = await httpGet(FUNBIT_URL)
       if (res.status !== 200) throw new Error(`HTTP ${res.status}`)
       telemetry = res.body
 
-      // Powróciło po przerwie
       if (!funbitOk || consecutiveFail > 0) {
         console.log()
         ok('Połączono z Funbit!')
@@ -269,45 +255,38 @@ ${C.bold}${C.amber}  ╔══════════════════�
         failCount       = 0
         consecutiveFail = 0
       }
-
     } catch (e) {
       failCount++
       consecutiveFail++
-
-      // Loguj przy pierwszym błędzie i co 12 ticki (~1 min)
       if (consecutiveFail === 1 || consecutiveFail % 12 === 0) {
         console.log()
         warn(`Funbit niedostępny — czekam na grę... (${e.message})`)
       }
-
-      // Po 3 nieudanych próbach z rzędu (15s) → wyślij online: false
       if (consecutiveFail === 3) {
-        process.stdout.write(`\r  ${C.dim}[${ts()}] 🔴  Bridge offline — gra zamknięta lub w menu${C.reset}   `)
-        await sendOffline()
+        process.stdout.write(
+          `\r  ${C.dim}[${ts()}] 🔴  Gra zamknięta lub w menu${C.reset}   `,
+        )
+        await sendOffline(config)
       }
-
       return
     }
 
-    // Funbit odpowiedział — sprawdź czy gra faktycznie połączona z pluginem
-    const { game, truck, job, trailer, navigation } = telemetry ?? {}
+    // 2. Sprawdź czy plugin połączony
+    const { game, truck, job } = telemetry ?? {}
 
-    // game.connected === false = gra otwarta ale plugin nie załadowany (menu główne)
     if (!game?.connected) {
       consecutiveFail = 0
-      process.stdout.write(`\r  ${C.dim}[${ts()}] ⏳  Oczekuję na załadowanie mapy...${C.reset}   `)
-
-      // Wyślij online: false żeby strona nie pokazywała starej pozycji
-      await sendOffline()
+      process.stdout.write(
+        `\r  ${C.dim}[${ts()}] ⏳  Oczekuję na załadowanie mapy...${C.reset}   `,
+      )
+      await sendOffline(config)
       return
     }
 
-    // Reset — gra działa poprawnie
     consecutiveFail = 0
-
     if (!truck) return
 
-    // 2. Wykryj zdarzenie joba
+    // 3. Zdarzenia joba
     const hasJob = !!(job?.sourceCity && job?.destinationCity)
     const jobKey = hasJob ? `${job.sourceCity}→${job.destinationCity}` : null
 
@@ -318,10 +297,10 @@ ${C.bold}${C.amber}  ╔══════════════════�
 
     const prevKey = lastJobKey
 
-    // 3. Zbuduj payload
+    // 4. Payload
     const { payload } = buildPayload(config, telemetry, event, prevKey)
 
-    // 4. Wyślij do serwera
+    // 5. Wyślij
     try {
       const res = await httpPost(`${config.server_url}/api/bridge`, payload)
 
@@ -367,6 +346,42 @@ ${C.bold}${C.amber}  ╔══════════════════�
     }
   }
 
+  // ── Start pętli ───────────────────────────────────────────
   await tick()
   tickInterval = setInterval(tick, SEND_INTERVAL)
+
+  // KLUCZOWE: utrzymaj proces przy życiu niezależnie od stdin
+  // setInterval sam w sobie utrzymuje event loop,
+  // ale dodajemy też unref-owany keepalive na wszelki wypadek
+  const keepAlive = setInterval(() => {}, 1_000 * 60 * 60)
+  keepAlive.unref()
 }
+
+// ─── MAIN ─────────────────────────────────────────────────
+async function main() {
+  const config = loadConfig()
+
+  if (!config) {
+    console.log()
+    err('Brak pliku konfiguracyjnego: vtc-config.json')
+    warn('Zamknij to okno i uruchom START_VTC.bat ponownie.')
+    console.log()
+    await new Promise(r => setTimeout(r, 10_000))
+    process.exit(1)
+  }
+
+  ok(`Konfiguracja wczytana: ${C.bold}${config.username}${C.reset} [${config.rank ?? '—'}]`)
+  info(`Serwer: ${C.dim}${config.server_url}${C.reset}`)
+  console.log()
+
+  await startBridge(config)
+}
+
+// ─── Obsługa błędów globalnych ────────────────────────────
+process.on('uncaughtException',  e => err(`Nieoczekiwany błąd: ${e.message}`))
+process.on('unhandledRejection', e => warn(`Nieobsłużone odrzucenie: ${e?.message ?? e}`))
+
+// KLUCZOWE: ignoruj SIGTERM z BAT — nie zamykaj się przy pipe close
+process.on('SIGTERM', () => warn('SIGTERM zignorowany — bridge działa dalej'))
+
+main()
