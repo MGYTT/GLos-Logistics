@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { cn }          from '@/lib/utils/cn'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { Umbrella } from 'lucide-react'
 
 // ─── Sekcje ────────────────────────────────────
 const NAV_SECTIONS = [
@@ -28,6 +29,8 @@ const NAV_SECTIONS = [
       { href: '/admin/jobs',        icon: Package,   label: 'Zlecenia',    color: 'text-orange-400', bg: 'bg-orange-400/10', border: 'border-orange-400/20' },
       { href: '/admin/wallet',      icon: Wallet,    label: 'Portfele',    color: 'text-green-400',  bg: 'bg-green-400/10',  border: 'border-green-400/20'  },
       { href: '/admin/recruitment', icon: FileText,  label: 'Podania',     color: 'text-pink-400',   bg: 'bg-pink-400/10',   border: 'border-pink-400/20'   },
+      { href:  '/admin/leaves', icon:  Umbrella, label: 'Urlopy', color: 'text-teal-400', bg:    'bg-teal-400/10',
+}
     ],
   },
   {
