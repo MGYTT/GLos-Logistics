@@ -99,18 +99,18 @@ function httpGet(url) {
 function buildPayload(config, telemetry, event, lastJobKey) {
   const { game, truck, job, trailer, navigation } = telemetry ?? {}
 
-  const placement    = truck?.placement ?? {}
-  const speedKmh     = Math.round(Math.abs(truck?.speed ?? 0) * 3.6 * 10) / 10
-  const gameTime     = game?.time ?? null
-  const hasJob       = !!(job?.sourceCity && job?.destinationCity)
-  const jobKey       = hasJob ? `${job.sourceCity}→${job.destinationCity}` : null
-  const cargo        = trailer?.name ?? trailer?.id ?? null
-  const distanceKm   = navigation?.estimatedDistance
+  const placement  = truck?.placement ?? {}
+  const speedKmh   = Math.round(Math.abs(truck?.speed ?? 0) * 3.6 * 10) / 10
+  const gameTime   = game?.time ?? null
+  const hasJob     = !!(job?.sourceCity && job?.destinationCity)
+  const jobKey     = hasJob ? `${job.sourceCity}→${job.destinationCity}` : null
+  const cargo      = trailer?.name ?? trailer?.id ?? null
+  const distanceKm = navigation?.estimatedDistance
     ? Math.round(navigation.estimatedDistance / 100) / 10
     : null
-  const income       = job?.income ?? null
+  const income = job?.income ?? null
 
-  const wearValues   = [
+  const wearValues = [
     truck?.wearEngine, truck?.wearTransmission,
     truck?.wearCabin,  truck?.wearChassis, truck?.wearWheels,
   ].filter(v => v != null)
@@ -123,6 +123,16 @@ function buildPayload(config, telemetry, event, lastJobKey) {
     ? Math.max(0, Math.round(truck.fuelCapacity - truck.fuel))
     : null
 
+  // ETA z nawigacji (sekundy → minuty)
+  const etaMinutes = navigation?.estimatedTime
+    ? Math.round(navigation.estimatedTime / 60)
+    : null
+
+  // Dystans całkowity joba (nie nawigacji) — Funbit daje job.plannedDistance
+  const jobMaxDistance = job?.plannedDistance
+    ? Math.round(job.plannedDistance / 100) / 10
+    : distanceKm
+
   return {
     jobKey,
     hasJob,
@@ -130,9 +140,9 @@ function buildPayload(config, telemetry, event, lastJobKey) {
       api_key: config.api_key,
 
       position: {
-        x:         placement.x  ?? 0,
-        y:         placement.y  ?? 0,
-        z:         placement.z  ?? 0,
+        x:         placement.x ?? 0,
+        y:         placement.y ?? 0,
+        z:         placement.z ?? 0,
         speed:     speedKmh,
         game_time: gameTime,
         online:    true,
@@ -159,6 +169,30 @@ function buildPayload(config, telemetry, event, lastJobKey) {
         fuel_used:        fuelUsed,
         damage_percent:   damagePercent,
       } : undefined,
+
+      // ── Pełna telemetria dla TelemetryBanner ──────────
+      telemetry: {
+        has_job:               hasJob,
+        from_city:             job?.sourceCity          ?? null,
+        from_company:          job?.sourceCompany       ?? null,
+        to_city:               job?.destinationCity     ?? null,
+        to_company:            job?.destinationCompany  ?? null,
+        cargo:                 cargo,
+        cargo_weight_kg:       trailer?.mass            ?? null,
+        income:                income,
+        job_max_distance:      jobMaxDistance,
+        distance_remaining_km: distanceKm,
+        eta_minutes:           etaMinutes,
+        truck_brand:           truck?.make              ?? null,
+        truck_model:           truck?.model             ?? null,
+        fuel_liters:           truck?.fuel              ?? null,
+        fuel_capacity:         truck?.fuelCapacity      ?? null,
+        odometer:              truck?.odometer
+          ? Math.round(truck.odometer / 1000)           // metry → km
+          : null,
+        rpm:                   truck?.engineRpm         ?? null,
+        gear:                  truck?.gear              ?? null,
+      },
     },
   }
 }

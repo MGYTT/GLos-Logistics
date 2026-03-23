@@ -28,18 +28,6 @@ function checkRateLimit(memberId: string): boolean {
 }
 
 // ─── Schematy Zod ─────────────────────────────────────────
-//
-//  NAPRAWIONE:
-//  1. game_time: max(8)  →  max(64).nullable()
-//     Funbit zwraca pełny ISO "2026-03-23T21:41:05.000Z" = 24 znaki
-//
-//  2. speed: min(0).max(300)  →  bez min/max + transform
-//     Bridge wysyła już km/h po konwersji z m/s
-//
-//  3. Wszystkie pola JobSchema: .optional()  →  .nullable().optional()
-//     Funbit zwraca null dla brakujących pól,
-//     a Zod .optional() akceptuje undefined ale NIE null!
-//
 const PositionSchema = z.object({
   x:         z.number(),
   y:         z.number().default(0),
@@ -60,12 +48,38 @@ const JobSchema = z.object({
   truckershub_job_id: z.string().max(64).nullable().optional(),
 })
 
+// ─── Rozszerzony payload z pełną telemetrią ───────────────
+// Bridge wysyła teraz dodatkowe pole `telemetry` z surowymi
+// danymi Funbit potrzebnymi przez TelemetryBanner
+const TelemetryExtSchema = z.object({
+  has_job:               z.boolean().optional(),
+  from_city:             z.string().max(80).nullable().optional(),
+  from_company:          z.string().max(120).nullable().optional(),
+  to_city:               z.string().max(80).nullable().optional(),
+  to_company:            z.string().max(120).nullable().optional(),
+  cargo:                 z.string().max(120).nullable().optional(),
+  cargo_weight_kg:       z.number().nullable().optional(),
+  income:                z.number().nullable().optional(),
+  job_max_distance:      z.number().nullable().optional(),
+  distance_remaining_km: z.number().nullable().optional(),
+  eta_minutes:           z.number().nullable().optional(),
+  truck_brand:           z.string().max(80).nullable().optional(),
+  truck_model:           z.string().max(80).nullable().optional(),
+  fuel_liters:           z.number().nullable().optional(),
+  fuel_capacity:         z.number().nullable().optional(),
+  odometer:              z.number().nullable().optional(),
+  rpm:                   z.number().nullable().optional(),
+  gear:                  z.number().nullable().optional(),
+}).optional()
+
 const BridgePayloadSchema = z.object({
   api_key:       z.string().uuid('Nieprawidłowy format api_key'),
   position:      PositionSchema,
   active_job:    JobSchema.nullable().optional(),
   event:         z.enum(['job_started', 'job_delivered', 'job_cancelled', 'none']).default('none'),
   delivered_job: JobSchema.nullable().optional(),
+  // Nowe pole — pełna telemetria dla dashboardu
+  telemetry:     TelemetryExtSchema,
 })
 
 type BridgePayload = z.infer<typeof BridgePayloadSchema>
@@ -102,15 +116,52 @@ async function upsertPosition(
     )
 }
 
-async function handleJobStarted(
+// ─── NOWA funkcja: upsert telemetrii dla dashboardu ───────
+async function upsertTelemetry(
   memberId: string,
-  job: z.infer<typeof JobSchema>,
+  position: z.infer<typeof PositionSchema>,
+  tel:      z.infer<typeof TelemetryExtSchema>,
 ) {
+  const now = new Date().toISOString()
+  return supabase
+    .from('member_telemetry')
+    .upsert(
+      {
+        member_id:             memberId,
+        online:                position.online,
+
+        has_job:               tel?.has_job               ?? false,
+        from_city:             tel?.from_city             ?? null,
+        from_company:          tel?.from_company          ?? null,
+        to_city:               tel?.to_city               ?? null,
+        to_company:            tel?.to_company            ?? null,
+        cargo:                 tel?.cargo                 ?? null,
+        cargo_weight_kg:       tel?.cargo_weight_kg       ?? null,
+        income:                tel?.income                ?? null,
+        job_max_distance:      tel?.job_max_distance      ?? null,
+        distance_remaining_km: tel?.distance_remaining_km ?? null,
+        eta_minutes:           tel?.eta_minutes           ?? null,
+
+        truck_brand:           tel?.truck_brand           ?? null,
+        truck_model:           tel?.truck_model           ?? null,
+        speed_kmh:             position.speed,
+        fuel_liters:           tel?.fuel_liters           ?? null,
+        fuel_capacity:         tel?.fuel_capacity         ?? null,
+        odometer:              tel?.odometer              ?? null,
+        rpm:                   tel?.rpm                   ?? null,
+        gear:                  tel?.gear                  ?? null,
+
+        game_time:             position.game_time         ?? null,
+        updated_at:            now,
+      },
+      { onConflict: 'member_id' },
+    )
+}
+
+async function handleJobStarted(memberId: string, job: z.infer<typeof JobSchema>) {
   await supabase
-    .from('jobs')
-    .update({ status: 'cancelled' })
-    .eq('member_id', memberId)
-    .eq('status', 'taken')
+    .from('jobs').update({ status: 'cancelled' })
+    .eq('member_id', memberId).eq('status', 'taken')
 
   return supabase.from('jobs').insert({
     member_id:          memberId,
@@ -129,20 +180,13 @@ async function handleJobStarted(
   })
 }
 
-async function handleJobDelivered(
-  memberId: string,
-  job: z.infer<typeof JobSchema>,
-) {
+async function handleJobDelivered(memberId: string, job: z.infer<typeof JobSchema>) {
   const now = new Date().toISOString()
 
   const { data: fuelRow } = await supabase
-    .from('fuel_prices')
-    .select('price')
-    .lte('valid_from',  now)
-    .gte('valid_until', now)
-    .order('valid_from', { ascending: false })
-    .limit(1)
-    .single()
+    .from('fuel_prices').select('price')
+    .lte('valid_from', now).gte('valid_until', now)
+    .order('valid_from', { ascending: false }).limit(1).single()
 
   const fuelPrice = fuelRow?.price ?? 2.8
 
@@ -159,13 +203,9 @@ async function handleJobDelivered(
   })
 
   const { data: activeJob } = await supabase
-    .from('jobs')
-    .select('id')
-    .eq('member_id', memberId)
-    .eq('status',    'taken')
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .single()
+    .from('jobs').select('id')
+    .eq('member_id', memberId).eq('status', 'taken')
+    .order('created_at', { ascending: false }).limit(1).single()
 
   const jobData = {
     cargo:            job.cargo            ?? null,
@@ -188,8 +228,7 @@ async function handleJobDelivered(
     const { data: inserted } = await supabase
       .from('jobs')
       .insert({ member_id: memberId, source: 'bridge', created_at: now, ...jobData })
-      .select('id')
-      .single()
+      .select('id').single()
     finalJobId = inserted?.id
   }
 
@@ -217,8 +256,7 @@ async function handleJobDelivered(
   const bonusPoints = Math.floor((job.distance_km ?? 0) / 100)
   if (bonusPoints > 0) {
     await supabase.rpc('increment_member_points', {
-      p_member_id: memberId,
-      p_points:    bonusPoints,
+      p_member_id: memberId, p_points: bonusPoints,
     })
   }
 
@@ -226,62 +264,47 @@ async function handleJobDelivered(
 }
 
 async function handleJobCancelled(memberId: string) {
-  await supabase
-    .from('jobs')
-    .update({ status: 'cancelled' })
-    .eq('member_id', memberId)
-    .eq('status',    'taken')
+  await supabase.from('jobs').update({ status: 'cancelled' })
+    .eq('member_id', memberId).eq('status', 'taken')
 }
 
 // ─── POST /api/bridge ─────────────────────────────────────
 export async function POST(req: NextRequest) {
   let body: unknown
-  try {
-    body = await req.json()
-  } catch {
+  try { body = await req.json() }
+  catch {
     return NextResponse.json({ ok: false, error: 'Invalid JSON' }, { status: 400 })
   }
 
   const parsed = BridgePayloadSchema.safeParse(body)
   if (!parsed.success) {
-    const issues = parsed.error.issues.map(i => ({
-      path:    i.path.join('.'),
-      message: i.message,
-    }))
-    // Loguj w Vercel console żeby łatwo debugować
+    const issues = parsed.error.issues.map(i => ({ path: i.path.join('.'), message: i.message }))
     console.error('[Bridge] Validation failed:', JSON.stringify(issues, null, 2))
-    return NextResponse.json(
-      { ok: false, error: 'Validation failed', issues },
-      { status: 422 },
-    )
+    return NextResponse.json({ ok: false, error: 'Validation failed', issues }, { status: 422 })
   }
 
   const payload = parsed.data
 
   const member = await resolveMember(payload.api_key)
-  if (!member) {
-    return NextResponse.json({ ok: false, error: 'Invalid api_key' }, { status: 401 })
-  }
+  if (!member) return NextResponse.json({ ok: false, error: 'Invalid api_key' }, { status: 401 })
+  if (member.is_banned) return NextResponse.json({ ok: false, error: 'Account is banned' }, { status: 403 })
+  if (!checkRateLimit(member.id)) return NextResponse.json(
+    { ok: false, error: 'Rate limit exceeded. Max 20 req / 10s' }, { status: 429 }
+  )
 
-  if (member.is_banned) {
-    return NextResponse.json({ ok: false, error: 'Account is banned' }, { status: 403 })
-  }
-
-  if (!checkRateLimit(member.id)) {
-    return NextResponse.json(
-      { ok: false, error: 'Rate limit exceeded. Max 20 req / 10s' },
-      { status: 429 },
-    )
-  }
-
+  // Upsert pozycji (mapa)
   const { error: posError } = await upsertPosition(member.id, payload.position)
   if (posError) {
     console.error('[Bridge] upsertPosition error:', posError)
     return NextResponse.json({ ok: false, error: 'DB error (position)' }, { status: 500 })
   }
 
-  switch (payload.event) {
+  // Upsert telemetrii (dashboard) — równolegle, nie blokujemy
+  upsertTelemetry(member.id, payload.position, payload.telemetry).catch(e =>
+    console.error('[Bridge] upsertTelemetry error:', e)
+  )
 
+  switch (payload.event) {
     case 'job_started':
       if (payload.active_job) {
         const { error } = await handleJobStarted(member.id, payload.active_job)
@@ -309,10 +332,6 @@ export async function POST(req: NextRequest) {
     case 'job_cancelled':
       await handleJobCancelled(member.id)
       break
-
-    case 'none':
-    default:
-      break
   }
 
   return NextResponse.json({
@@ -326,9 +345,6 @@ export async function POST(req: NextRequest) {
 // ─── GET /api/bridge (health check) ──────────────────────
 export async function GET() {
   return NextResponse.json({
-    ok:      true,
-    service: 'VTC Bridge API',
-    version: '1.0.0',
-    time:    new Date().toISOString(),
+    ok: true, service: 'VTC Bridge API', version: '1.0.0', time: new Date().toISOString(),
   })
 }
