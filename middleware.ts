@@ -105,6 +105,7 @@ export async function middleware(request: NextRequest) {
 
   // ── /hub i chronione trasy ──────────────────
   if (path.startsWith('/hub')) {
+    if (isAdmin) return supabaseResponse
     if (!appStatus || appStatus === 'rejected') {
       return NextResponse.redirect(new URL('/apply', request.url))
     }
