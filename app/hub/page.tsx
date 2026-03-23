@@ -47,6 +47,7 @@ export default async function HubPage() {
       .maybeSingle()
       .then(r => r.data ?? null),
   ])
+console.log('[HUB] memberId:', memberId, '| user.id:', user.id)
 
   const today = new Date().toISOString().split('T')[0]
   const todayJobs = recentJobs.filter(j =>
