@@ -1,24 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
-import { z } from 'zod'
-import { sendJobDeliveredWebhook } from '@/lib/discord/webhooks'
+import { createClient }              from '@supabase/supabase-js'
+import { z }                         from 'zod'
+import { sendJobDeliveredWebhook }   from '@/lib/discord/webhooks'
 
-// ─── Admin client (service role) ───────────────
+// ─── Admin client ─────────────────────────────────────────
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  { auth: { persistSession: false } }
+  { auth: { persistSession: false } },
 )
 
-// ─── Rate limit ────────────────────────────────
+// ─── Rate limit ───────────────────────────────────────────
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>()
 
 function checkRateLimit(memberId: string): boolean {
   const now    = Date.now()
   const window = 10_000
   const limit  = 20
-
-  const entry = rateLimitMap.get(memberId)
+  const entry  = rateLimitMap.get(memberId)
   if (!entry || now > entry.resetAt) {
     rateLimitMap.set(memberId, { count: 1, resetAt: now + window })
     return true
@@ -28,25 +27,37 @@ function checkRateLimit(memberId: string): boolean {
   return true
 }
 
-// ─── Schematy Zod ──────────────────────────────
+// ─── Schematy Zod ─────────────────────────────────────────
+//
+//  NAPRAWIONE:
+//  1. game_time: max(8)  →  max(64).nullable()
+//     Funbit zwraca pełny ISO "2026-03-23T21:41:05.000Z" = 24 znaki
+//
+//  2. speed: min(0).max(300)  →  bez min/max + transform
+//     Bridge wysyła już km/h po konwersji z m/s
+//
+//  3. Wszystkie pola JobSchema: .optional()  →  .nullable().optional()
+//     Funbit zwraca null dla brakujących pól,
+//     a Zod .optional() akceptuje undefined ale NIE null!
+//
 const PositionSchema = z.object({
   x:         z.number(),
   y:         z.number().default(0),
   z:         z.number(),
-  speed:     z.number().min(0).max(300),
-  game_time: z.string().max(8).optional(),
+  speed:     z.number().transform(v => Math.round(Math.abs(v) * 10) / 10),
+  game_time: z.string().max(64).nullable().optional(),
   online:    z.boolean().default(true),
 })
 
 const JobSchema = z.object({
-  cargo:              z.string().max(120).optional(),
-  origin_city:        z.string().max(80).optional(),
-  destination_city:   z.string().max(80).optional(),
-  distance_km:        z.number().min(0).max(20000).optional(),
-  income:             z.number().min(0).optional(),
-  fuel_used:          z.number().min(0).optional(),
-  damage_percent:     z.number().min(0).max(100).optional(),
-  truckershub_job_id: z.string().max(64).optional().nullable(),
+  cargo:              z.string().max(120).nullable().optional(),
+  origin_city:        z.string().max(80).nullable().optional(),
+  destination_city:   z.string().max(80).nullable().optional(),
+  distance_km:        z.number().min(0).max(20_000).nullable().optional(),
+  income:             z.number().min(0).nullable().optional(),
+  fuel_used:          z.number().min(0).nullable().optional(),
+  damage_percent:     z.number().min(0).max(100).nullable().optional(),
+  truckershub_job_id: z.string().max(64).nullable().optional(),
 })
 
 const BridgePayloadSchema = z.object({
@@ -54,26 +65,25 @@ const BridgePayloadSchema = z.object({
   position:      PositionSchema,
   active_job:    JobSchema.nullable().optional(),
   event:         z.enum(['job_started', 'job_delivered', 'job_cancelled', 'none']).default('none'),
-  delivered_job: JobSchema.optional(),
+  delivered_job: JobSchema.nullable().optional(),
 })
 
 type BridgePayload = z.infer<typeof BridgePayloadSchema>
 
-// ─── Helpers ───────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────
 async function resolveMember(apiKey: string) {
   const { data, error } = await supabase
     .from('members')
-    .select('id, username, avatar_url, is_banned, rank')  // ← dodano avatar_url
+    .select('id, username, avatar_url, is_banned, rank')
     .eq('api_key', apiKey)
     .single()
-
   if (error || !data) return null
   return data
 }
 
 async function upsertPosition(
   memberId: string,
-  position: z.infer<typeof PositionSchema>
+  position: z.infer<typeof PositionSchema>,
 ) {
   return supabase
     .from('driver_positions')
@@ -83,18 +93,18 @@ async function upsertPosition(
         x:          position.x,
         y:          position.y,
         z:          position.z,
-        speed:      Math.round(position.speed * 10) / 10,
+        speed:      position.speed,
         game_time:  position.game_time ?? null,
         online:     position.online,
         updated_at: new Date().toISOString(),
       },
-      { onConflict: 'member_id' }
+      { onConflict: 'member_id' },
     )
 }
 
 async function handleJobStarted(
   memberId: string,
-  job: z.infer<typeof JobSchema>
+  job: z.infer<typeof JobSchema>,
 ) {
   await supabase
     .from('jobs')
@@ -102,36 +112,33 @@ async function handleJobStarted(
     .eq('member_id', memberId)
     .eq('status', 'taken')
 
-  return supabase
-    .from('jobs')
-    .insert({
-      member_id:          memberId,
-      cargo:              job.cargo            ?? null,
-      origin_city:        job.origin_city      ?? null,
-      destination_city:   job.destination_city ?? null,
-      distance_km:        job.distance_km      ?? null,
-      income:             job.income           ?? null,
-      fuel_used:          null,
-      damage_percent:     0,
-      truckershub_job_id: job.truckershub_job_id ?? null,
-      status:             'taken',
-      source:             'bridge',
-      completed_at:       null,
-      created_at:         new Date().toISOString(),
-    })
+  return supabase.from('jobs').insert({
+    member_id:          memberId,
+    cargo:              job.cargo              ?? null,
+    origin_city:        job.origin_city        ?? null,
+    destination_city:   job.destination_city   ?? null,
+    distance_km:        job.distance_km        ?? null,
+    income:             job.income             ?? null,
+    fuel_used:          null,
+    damage_percent:     0,
+    truckershub_job_id: job.truckershub_job_id ?? null,
+    status:             'taken',
+    source:             'bridge',
+    completed_at:       null,
+    created_at:         new Date().toISOString(),
+  })
 }
 
-// ─── handleJobDelivered zwraca pay ─────────────
 async function handleJobDelivered(
   memberId: string,
-  job: z.infer<typeof JobSchema>
+  job: z.infer<typeof JobSchema>,
 ) {
   const now = new Date().toISOString()
 
   const { data: fuelRow } = await supabase
     .from('fuel_prices')
     .select('price')
-    .lte('valid_from', now)
+    .lte('valid_from',  now)
     .gte('valid_until', now)
     .order('valid_from', { ascending: false })
     .limit(1)
@@ -141,10 +148,10 @@ async function handleJobDelivered(
 
   const { calculateJobPay } = await import('@/lib/vtc/payCalculator')
   const pay = calculateJobPay({
-    distance_km:      job.distance_km      ?? 0,
+    distance_km:      job.distance_km    ?? 0,
     cargo_units:      1,
-    fuel_used_liters: job.fuel_used        ?? null,
-    damage_percent:   job.damage_percent   ?? 0,
+    fuel_used_liters: job.fuel_used      ?? null,
+    damage_percent:   job.damage_percent ?? 0,
     cargo_type:       null,
     had_fine:         false,
     fine_amount:      0,
@@ -155,24 +162,24 @@ async function handleJobDelivered(
     .from('jobs')
     .select('id')
     .eq('member_id', memberId)
-    .eq('status', 'taken')
+    .eq('status',    'taken')
     .order('created_at', { ascending: false })
     .limit(1)
     .single()
 
   const jobData = {
-    cargo:            job.cargo            ?? undefined,
-    origin_city:      job.origin_city      ?? undefined,
-    destination_city: job.destination_city ?? undefined,
-    distance_km:      job.distance_km      ?? undefined,
+    cargo:            job.cargo            ?? null,
+    origin_city:      job.origin_city      ?? null,
+    destination_city: job.destination_city ?? null,
+    distance_km:      job.distance_km      ?? null,
     income:           pay.driver_share,
-    fuel_used:        job.fuel_used        ?? undefined,
-    damage_percent:   job.damage_percent   ?? undefined,
+    fuel_used:        job.fuel_used        ?? null,
+    damage_percent:   job.damage_percent   ?? null,
     status:           'completed',
     completed_at:     now,
   }
 
-  let finalJobId: string
+  let finalJobId: string | undefined
 
   if (activeJob) {
     await supabase.from('jobs').update(jobData).eq('id', activeJob.id)
@@ -181,7 +188,8 @@ async function handleJobDelivered(
     const { data: inserted } = await supabase
       .from('jobs')
       .insert({ member_id: memberId, source: 'bridge', created_at: now, ...jobData })
-      .select('id').single()
+      .select('id')
+      .single()
     finalJobId = inserted?.id
   }
 
@@ -189,7 +197,7 @@ async function handleJobDelivered(
     p_member_id:   memberId,
     p_amount:      pay.driver_share,
     p_type:        'job_pay',
-    p_job_id:      finalJobId,
+    p_job_id:      finalJobId ?? null,
     p_description: `Job ${job.origin_city ?? '?'} → ${job.destination_city ?? '?'}`,
     p_metadata: {
       gross:          pay.gross,
@@ -203,7 +211,7 @@ async function handleJobDelivered(
     p_amount:      pay.company_share,
     p_type:        'company_tax',
     p_member_id:   memberId,
-    p_description: `Podatek firmowy — Job ${finalJobId?.slice(0, 8)}`,
+    p_description: `Podatek firmowy — Job ${finalJobId?.slice(0, 8) ?? '?'}`,
   })
 
   const bonusPoints = Math.floor((job.distance_km ?? 0) / 100)
@@ -214,7 +222,6 @@ async function handleJobDelivered(
     })
   }
 
-  // ← zwracamy pay żeby użyć w POST handler
   return pay
 }
 
@@ -223,10 +230,10 @@ async function handleJobCancelled(memberId: string) {
     .from('jobs')
     .update({ status: 'cancelled' })
     .eq('member_id', memberId)
-    .eq('status', 'taken')
+    .eq('status',    'taken')
 }
 
-// ─── POST /api/bridge ──────────────────────────
+// ─── POST /api/bridge ─────────────────────────────────────
 export async function POST(req: NextRequest) {
   let body: unknown
   try {
@@ -237,16 +244,15 @@ export async function POST(req: NextRequest) {
 
   const parsed = BridgePayloadSchema.safeParse(body)
   if (!parsed.success) {
+    const issues = parsed.error.issues.map(i => ({
+      path:    i.path.join('.'),
+      message: i.message,
+    }))
+    // Loguj w Vercel console żeby łatwo debugować
+    console.error('[Bridge] Validation failed:', JSON.stringify(issues, null, 2))
     return NextResponse.json(
-      {
-        ok:     false,
-        error:  'Validation failed',
-        issues: parsed.error.issues.map(i => ({
-          path:    i.path.join('.'),
-          message: i.message,
-        })),
-      },
-      { status: 422 }
+      { ok: false, error: 'Validation failed', issues },
+      { status: 422 },
     )
   }
 
@@ -264,7 +270,7 @@ export async function POST(req: NextRequest) {
   if (!checkRateLimit(member.id)) {
     return NextResponse.json(
       { ok: false, error: 'Rate limit exceeded. Max 20 req / 10s' },
-      { status: 429 }
+      { status: 429 },
     )
   }
 
@@ -275,6 +281,7 @@ export async function POST(req: NextRequest) {
   }
 
   switch (payload.event) {
+
     case 'job_started':
       if (payload.active_job) {
         const { error } = await handleJobStarted(member.id, payload.active_job)
@@ -285,8 +292,6 @@ export async function POST(req: NextRequest) {
     case 'job_delivered':
       if (payload.delivered_job) {
         const pay = await handleJobDelivered(member.id, payload.delivered_job)
-
-        // ── Discord webhook ─────────────────────
         await sendJobDeliveredWebhook({
           username:         member.username,
           avatar_url:       member.avatar_url ?? null,
@@ -318,7 +323,7 @@ export async function POST(req: NextRequest) {
   })
 }
 
-// ─── GET /api/bridge (health check) ────────────
+// ─── GET /api/bridge (health check) ──────────────────────
 export async function GET() {
   return NextResponse.json({
     ok:      true,
