@@ -300,9 +300,8 @@ export async function POST(req: NextRequest) {
   }
 
   // Upsert telemetrii (dashboard) — równolegle, nie blokujemy
-  upsertTelemetry(member.id, payload.position, payload.telemetry).catch(e =>
-    console.error('[Bridge] upsertTelemetry error:', e)
-  )
+  const { error: telError } = await upsertTelemetry(member.id, payload.position, payload.telemetry)
+if (telError) console.error('[Bridge] upsertTelemetry error:', telError.message, telError.details)
 
   switch (payload.event) {
     case 'job_started':
