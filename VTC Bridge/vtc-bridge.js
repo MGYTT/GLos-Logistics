@@ -96,8 +96,8 @@ function httpGet(url) {
 }
 
 // ─── Mapowanie Funbit → payload ───────────────────────────
-function buildPayload(config, telemetry, event, lastJobKey) {
-  const { game, truck, job, trailer, navigation } = telemetry ?? {}
+function buildPayload(config, rawTelemetry, event, lastJobKey) {
+  const { game, truck, job, trailer, navigation } = rawTelemetry ?? {}
 
   const placement  = truck?.placement ?? {}
   const speedKmh   = Math.round(Math.abs(truck?.speed ?? 0) * 3.6 * 10) / 10
@@ -105,9 +105,19 @@ function buildPayload(config, telemetry, event, lastJobKey) {
   const hasJob     = !!(job?.sourceCity && job?.destinationCity)
   const jobKey     = hasJob ? `${job.sourceCity}→${job.destinationCity}` : null
   const cargo      = trailer?.name ?? trailer?.id ?? null
+
   const distanceKm = navigation?.estimatedDistance
     ? Math.round(navigation.estimatedDistance / 100) / 10
     : null
+
+  const etaMinutes = navigation?.estimatedTime
+    ? Math.round(navigation.estimatedTime / 60)
+    : null
+
+  const jobMaxDistance = job?.plannedDistance
+    ? Math.round(job.plannedDistance / 100) / 10
+    : distanceKm
+
   const income = job?.income ?? null
 
   const wearValues = [
@@ -123,20 +133,34 @@ function buildPayload(config, telemetry, event, lastJobKey) {
     ? Math.max(0, Math.round(truck.fuelCapacity - truck.fuel))
     : null
 
-  // ETA z nawigacji (sekundy → minuty)
-  const etaMinutes = navigation?.estimatedTime
-    ? Math.round(navigation.estimatedTime / 60)
-    : null
-
-  // Dystans całkowity joba (nie nawigacji) — Funbit daje job.plannedDistance
-  const jobMaxDistance = job?.plannedDistance
-    ? Math.round(job.plannedDistance / 100) / 10
-    : distanceKm
+  // ── Telemetria dla dashboardu ────────────────────────────
+  const telemetryData = {
+    has_job:               hasJob,
+    from_city:             job?.sourceCity         ?? null,
+    from_company:          job?.sourceCompany      ?? null,
+    to_city:               job?.destinationCity    ?? null,
+    to_company:            job?.destinationCompany ?? null,
+    cargo,
+    cargo_weight_kg:       trailer?.mass           ?? null,
+    income,
+    job_max_distance:      jobMaxDistance,
+    distance_remaining_km: distanceKm,
+    eta_minutes:           etaMinutes,
+    truck_brand:           truck?.make             ?? null,
+    truck_model:           truck?.model            ?? null,
+    fuel_liters:           truck?.fuel             ?? null,
+    fuel_capacity:         truck?.fuelCapacity     ?? null,
+    odometer:              truck?.odometer
+      ? Math.round(truck.odometer / 1000)
+      : null,
+    rpm:  truck?.engineRpm ?? null,
+    gear: truck?.gear      ?? null,
+  }
 
   return {
     jobKey,
     hasJob,
-    payload: {
+    result: {                          // ← zmieniono z 'payload' na 'result'
       api_key: config.api_key,
 
       position: {
@@ -170,29 +194,7 @@ function buildPayload(config, telemetry, event, lastJobKey) {
         damage_percent:   damagePercent,
       } : undefined,
 
-      // ── Pełna telemetria dla TelemetryBanner ──────────
-      telemetry: {
-        has_job:               hasJob,
-        from_city:             job?.sourceCity          ?? null,
-        from_company:          job?.sourceCompany       ?? null,
-        to_city:               job?.destinationCity     ?? null,
-        to_company:            job?.destinationCompany  ?? null,
-        cargo:                 cargo,
-        cargo_weight_kg:       trailer?.mass            ?? null,
-        income:                income,
-        job_max_distance:      jobMaxDistance,
-        distance_remaining_km: distanceKm,
-        eta_minutes:           etaMinutes,
-        truck_brand:           truck?.make              ?? null,
-        truck_model:           truck?.model             ?? null,
-        fuel_liters:           truck?.fuel              ?? null,
-        fuel_capacity:         truck?.fuelCapacity      ?? null,
-        odometer:              truck?.odometer
-          ? Math.round(truck.odometer / 1000)           // metry → km
-          : null,
-        rpm:                   truck?.engineRpm         ?? null,
-        gear:                  truck?.gear              ?? null,
-      },
+      telemetry: telemetryData,
     },
   }
 }
@@ -332,11 +334,10 @@ console.log('\n[DEBUG] payload.telemetry:', JSON.stringify(payload.telemetry, nu
     const prevKey = lastJobKey
 
     // 4. Payload
-    const { payload } = buildPayload(config, telemetry, event, prevKey)
-
+    const { result } = buildPayload(config, telemetry, event, prevKey)
     // 5. Wyślij
     try {
-      const res = await httpPost(`${config.server_url}/api/bridge`, payload)
+      const res = await httpPost(`${config.server_url}/api/bridge`, result)
 
       if (res.status === 200 && res.body?.ok) {
         lastJobKey = hasJob ? jobKey : null
@@ -349,7 +350,7 @@ console.log('\n[DEBUG] payload.telemetry:', JSON.stringify(payload.telemetry, nu
           process.stdout.write(
             `\r  ${C.dim}[${ts()}] ⟳  ${
               hasJob
-                ? `🚛 ${jobKey}  ${payload.position.speed} km/h`
+                ? `🚛 ${jobKey}  ${result.position.speed} km/h`
                 : '🅿  Brak zlecenia'
             }${C.reset}   `,
           )
