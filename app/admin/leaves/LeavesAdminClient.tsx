@@ -35,6 +35,12 @@ interface Props {
     pending:   number
     thisMonth: number
     total:     number
+    byType: {
+      paid:   number
+      sick:   number
+      unpaid: number
+      forced: number
+    }
   }
 }
 
@@ -552,50 +558,74 @@ export function LeavesAdminClient({ leaves: initial, members, adminId, stats }: 
 
       {/* Statystyki */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {[
-          {
-            label: 'Na urlopie teraz',
-            value: stats.activeNow,
-            icon:  Umbrella,
-            color: 'text-blue-400',
-            bg:    'bg-blue-400/10',
-          },
-          {
-            label: 'Oczekujące wnioski',
-            value: stats.pending,
-            icon:  Clock,
-            color: stats.pending > 0 ? 'text-amber-400' : 'text-zinc-500',
-            bg:    stats.pending > 0 ? 'bg-amber-400/10' : 'bg-zinc-500/10',
-          },
-          {
-            label: 'W tym miesiącu',
-            value: stats.thisMonth,
-            icon:  CalendarDays,
-            color: 'text-green-400',
-            bg:    'bg-green-400/10',
-          },
-          {
-            label: 'Łącznie wniosków',
-            value: stats.total,
-            icon:  TrendingUp,
-            color: 'text-zinc-400',
-            bg:    'bg-zinc-400/10',
-          },
-        ].map(({ label, value, icon: Icon, color, bg }) => (
-          <div key={label}
-            className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-5
-                       flex items-center gap-4">
-            <div className={cn('w-11 h-11 rounded-xl flex items-center justify-center shrink-0', bg)}>
-              <Icon className={cn('w-5 h-5', color)} />
-            </div>
-            <div>
-              <p className="text-xs text-zinc-500 uppercase tracking-wider">{label}</p>
-              <p className={cn('text-2xl font-black mt-0.5', color)}>{value}</p>
-            </div>
-          </div>
-        ))}
+  {[
+    {
+      label: 'Na urlopie teraz',
+      value: stats.activeNow,
+      icon:  Umbrella,
+      color: 'text-blue-400',
+      bg:    'bg-blue-400/10',
+    },
+    {
+      label: 'Oczekujące wnioski',
+      value: stats.pending,
+      icon:  Clock,
+      color: stats.pending > 0 ? 'text-amber-400' : 'text-zinc-500',
+      bg:    stats.pending > 0 ? 'bg-amber-400/10' : 'bg-zinc-500/10',
+    },
+    {
+      label: 'W tym miesiącu',
+      value: stats.thisMonth,
+      icon:  CalendarDays,
+      color: 'text-green-400',
+      bg:    'bg-green-400/10',
+    },
+    {
+      label: 'Łącznie wniosków',
+      value: stats.total,
+      icon:  TrendingUp,
+      color: 'text-zinc-400',
+      bg:    'bg-zinc-400/10',
+    },
+  ].map(({ label, value, icon: Icon, color, bg }) => (
+    <div key={label}
+      className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-5
+                 flex items-center gap-4">
+      <div className={cn('w-11 h-11 rounded-xl flex items-center justify-center shrink-0', bg)}>
+        <Icon className={cn('w-5 h-5', color)} />
       </div>
-
+      <div>
+        <p className="text-xs text-zinc-500 uppercase tracking-wider">{label}</p>
+        <p className={cn('text-2xl font-black mt-0.5', color)}>{value}</p>
+      </div>
+    </div>
+  ))}
+</div>
+<div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+  {(
+    [
+      { type: 'paid',   label: 'Urlop płatny',    icon: Umbrella    },
+      { type: 'sick',   label: 'L4',              icon: Stethoscope },
+      { type: 'unpaid', label: 'Bezpłatny',       icon: UmbrellaOff },
+      { type: 'forced', label: 'Przymusowe',      icon: ShieldAlert },
+    ] as const
+  ).map(({ type, label, icon: Icon }) => (
+    <div key={type}
+      className={cn(
+        'flex items-center gap-3 p-3 rounded-xl border',
+        LEAVE_COLORS[type].bg,
+        LEAVE_COLORS[type].border,
+      )}>
+      <Icon className={cn('w-4 h-4 shrink-0', LEAVE_COLORS[type].color)} />
+      <div>
+        <p className="text-xs text-zinc-500">{label}</p>
+        <p className={cn('text-lg font-black', LEAVE_COLORS[type].color)}>
+          {stats.byType[type]}
+        </p>
+      </div>
+    </div>
+  ))}
+</div>
       {/* Baner oczekujących */}
       {stats.pending > 0 && (
         <motion.div
