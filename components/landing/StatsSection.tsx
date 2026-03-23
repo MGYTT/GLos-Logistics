@@ -7,6 +7,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Trophy, TrendingUp, DollarSign, Users } from 'lucide-react'
 import type { RankingEntry } from '@/types'
+import type { Variants } from 'framer-motion'
 
 interface Props {
   memberCount:  number
@@ -37,9 +38,9 @@ function AnimatedNumber({ value, suffix = '' }: { value: number; suffix?: string
   )
 }
 
-const card = {
+const card: Variants = {
   hidden:  { opacity: 0, y: 36 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.6, ease: 'easeOut' } },
+  visible: { opacity: 1, y: 0, transition: { duration: 0.6, ease: 'easeOut' as const } },
 }
 
 export function StatsSection({ memberCount, topDriver, totalIncome, totalKm }: Props) {

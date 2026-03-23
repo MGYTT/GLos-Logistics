@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { ChevronRight, Users, Truck, MapPin, Star, ArrowDown } from 'lucide-react'
 import { ParticlesBackground } from './ParticlesBackground'
+import type { Variants } from 'framer-motion'
 
 interface Props {
   memberCount: number
@@ -18,17 +19,17 @@ function formatKm(km: number) {
   return km > 0 ? String(km) : '0'
 }
 
-const fadeUp = {
+const fadeUp: Variants = {
   hidden:  { opacity: 0, y: 28 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.7, ease: [0.25, 0.1, 0.25, 1] } },
+  visible: { opacity: 1, y: 0, transition: { duration: 0.7, ease: [0.25, 0.1, 0.25, 1] as const } },
 }
 
-const scaleIn = {
+const scaleIn: Variants = {
   hidden:  { opacity: 0, scale: 0.88 },
-  visible: { opacity: 1, scale: 1,   transition: { duration: 0.5, ease: 'backOut' } },
+  visible: { opacity: 1, scale: 1, transition: { duration: 0.5, ease: 'backOut' } },
 }
 
-const container = {
+const container: Variants = {
   hidden:  {},
   visible: { transition: { staggerChildren: 0.11, delayChildren: 0.2 } },
 }

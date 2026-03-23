@@ -63,3 +63,4 @@ export function useLiveMap() {
 
   return { drivers: onlineDrivers, allDrivers: drivers, connected, lastUpdate }
 }
+export type MapStatus = 'connected' | 'disconnected'

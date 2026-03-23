@@ -1,13 +1,12 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import Particles, { initParticlesEngine } from '@tsparticles/react'
 import { loadSlim } from '@tsparticles/slim'
 
 export function ParticlesBackground() {
   const [ready, setReady] = useState(false)
 
-  // Nowe API @tsparticles/react v3 — initParticlesEngine zamiast init prop
   useEffect(() => {
     initParticlesEngine(async engine => {
       await loadSlim(engine)
@@ -30,11 +29,23 @@ export function ParticlesBackground() {
           shape:   { type: 'circle' },
           opacity: {
             value:     { min: 0.05, max: 0.2 },
-            animation: { enable: true, speed: 0.5, minimumValue: 0.05 },
+            animation: {
+              enable:     true,
+              speed:      0.5,
+              sync:       false,
+              destroy:    'none',
+              startValue: 'random',
+            },
           },
           size: {
             value:     { min: 1, max: 2.5 },
-            animation: { enable: true, speed: 1, minimumValue: 0.5 },
+            animation: {
+              enable:     true,
+              speed:      1,
+              sync:       false,
+              destroy:    'none',
+              startValue: 'random',
+            },
           },
           links: {
             enable:   true,
@@ -54,8 +65,8 @@ export function ParticlesBackground() {
         },
         interactivity: {
           events: {
-            onHover: { enable: true,  mode: 'grab' },
-            onClick: { enable: true,  mode: 'push' },
+            onHover: { enable: true, mode: 'grab' },
+            onClick: { enable: true, mode: 'push' },
           },
           modes: {
             grab: { distance: 140, links: { opacity: 0.25 } },

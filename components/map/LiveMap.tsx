@@ -1,11 +1,13 @@
 'use client'
-import { useState } from 'react'
-import { useLiveMap, DriverOnMap, Member } from '@/lib/hooks/useLiveMap'
-import { MapStatusBar } from './MapStatusBar'
-import { MapDriverPanel } from './MapDriverPanel'
-import { ServerSelector } from './ServerSelector'
-import { Loader2 } from 'lucide-react'
-import dynamic from 'next/dynamic'
+
+import { useState }        from 'react'
+import { useLiveMap }      from '@/lib/hooks/useLiveMap'
+import type { LiveDriver } from '@/lib/hooks/useLiveMap'
+import { MapStatusBar }    from './MapStatusBar'
+import { MapDriverPanel }  from './MapDriverPanel'
+import { ServerSelector }  from './ServerSelector'
+import { Loader2 }         from 'lucide-react'
+import dynamic             from 'next/dynamic'
 
 const MapCanvas = dynamic(() => import('./MapCanvas'), {
   ssr: false,
@@ -20,12 +22,31 @@ const MapCanvas = dynamic(() => import('./MapCanvas'), {
   ),
 })
 
+// Typy lokalne — zastępują usunięte eksporty z hooka
+export interface Member {
+  id:         string
+  username:   string
+  avatar_url: string | null
+  rank:       string
+}
+
 interface Props { members: Member[] }
 
 export function LiveMap({ members }: Props) {
   const [serverId, setServerId] = useState(1)
-  const [selected, setSelected] = useState<DriverOnMap | null>(null)
-  const { drivers, status, lastUpdate, vtcOnline, totalOnline } = useLiveMap(members, serverId)
+  const [selected, setSelected] = useState<LiveDriver | null>(null)
+
+  // ← hook bez argumentów, zgodnie z useLiveMap.ts
+  const { drivers, connected, lastUpdate } = useLiveMap()
+
+  // Oblicz vtcOnline i totalOnline lokalnie
+  const vtcOnline   = drivers.filter(d =>
+    members.some(m => m.id === d.member_id)
+  ).length
+  const totalOnline = drivers.length
+
+  // Mapuj connected → status string dla MapStatusBar
+  const status = connected ? 'connected' : 'disconnected'
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden h-full">
