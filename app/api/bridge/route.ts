@@ -129,7 +129,6 @@ async function upsertTelemetry(
       {
         member_id:             memberId,
         online:                position.online,
-
         has_job:               tel?.has_job               ?? false,
         from_city:             tel?.from_city             ?? null,
         from_company:          tel?.from_company          ?? null,
@@ -140,17 +139,22 @@ async function upsertTelemetry(
         income:                tel?.income                ?? null,
         job_max_distance:      tel?.job_max_distance      ?? null,
         distance_remaining_km: tel?.distance_remaining_km ?? null,
-        eta_minutes:           tel?.eta_minutes           ?? null,
-
+        // ← Math.round() żeby nigdy nie wysłać 667.9 do integer/numeric
+        eta_minutes:           tel?.eta_minutes != null
+          ? Math.round(tel.eta_minutes)
+          : null,
         truck_brand:           tel?.truck_brand           ?? null,
         truck_model:           tel?.truck_model           ?? null,
         speed_kmh:             position.speed,
         fuel_liters:           tel?.fuel_liters           ?? null,
         fuel_capacity:         tel?.fuel_capacity         ?? null,
         odometer:              tel?.odometer              ?? null,
-        rpm:                   tel?.rpm                   ?? null,
-        gear:                  tel?.gear                  ?? null,
-
+        rpm:                   tel?.rpm != null
+          ? Math.round(tel.rpm)
+          : null,
+        gear:                  tel?.gear != null
+          ? Math.round(tel.gear)
+          : null,
         game_time:             position.game_time         ?? null,
         updated_at:            now,
       },
