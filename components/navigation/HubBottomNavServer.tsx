@@ -6,6 +6,7 @@ export async function HubBottomNavServer() {
   const { data: { user } } = await supabase.auth.getUser()
 
   let walletAlert = false
+
   if (user) {
     const { data } = await supabase
       .from('loans')

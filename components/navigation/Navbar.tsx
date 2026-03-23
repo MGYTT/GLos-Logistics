@@ -1,12 +1,16 @@
 'use client'
-import { useState, useEffect } from 'react'
-import Link from 'next/link'
-import { usePathname } from 'next/navigation'
-import { motion, AnimatePresence, useScroll, useMotionValueEvent } from 'framer-motion'
-import { Button } from '@/components/ui/button'
-import { MobileNav } from './MobileNav'
-import { Truck } from 'lucide-react'
-import { cn } from '@/lib/utils/cn'
+
+import { useState }              from 'react'
+import Link                      from 'next/link'
+import { usePathname }           from 'next/navigation'
+import {
+  motion, AnimatePresence,
+  useScroll, useMotionValueEvent,
+} from 'framer-motion'
+import { Button }                from '@/components/ui/button'
+import { MobileNav }             from './MobileNav'
+import { Truck, Gauge }          from 'lucide-react'
+import { cn }                    from '@/lib/utils/cn'
 
 const navLinks = [
   { href: '/news',        label: 'Aktualności' },
@@ -14,16 +18,18 @@ const navLinks = [
   { href: '/rankings',    label: 'Rankingi'    },
   { href: '/members',     label: 'Kierowcy'    },
   { href: '/recruitment', label: 'Rekrutacja'  },
-  { href: '/hub/bridge', label: 'ETS2 Bridge' },
-
+  { href: '/hub/bridge',  label: 'ETS2 Bridge' },
 ]
 
 export function Navbar() {
-  const pathname  = usePathname()
+  const pathname             = usePathname()
   const [scrolled, setScrolled] = useState(false)
-  const [hidden, setHidden]     = useState(false)
-  const [lastY, setLastY]       = useState(0)
+  const [hidden,   setHidden]   = useState(false)
+  const [lastY,    setLastY]    = useState(0)
   const { scrollY } = useScroll()
+
+  // Ukryj navbar w /hub — tam jest HubSidebar
+  if (pathname.startsWith('/hub') || pathname.startsWith('/admin')) return null
 
   useMotionValueEvent(scrollY, 'change', (y) => {
     setScrolled(y > 20)
@@ -34,59 +40,66 @@ export function Navbar() {
   return (
     <motion.header
       animate={{ y: hidden ? -80 : 0 }}
-      transition={{ duration: 0.3, ease: 'easeInOut' }}
+      transition={{ duration: 0.25, ease: 'easeInOut' }}
       className={cn(
-        'fixed top-0 left-0 right-0 z-50 transition-all duration-300',
+        'fixed top-0 left-0 right-0 z-50 transition-colors duration-300',
         scrolled
           ? 'bg-zinc-950/90 backdrop-blur-xl border-b border-white/10 shadow-lg shadow-black/20'
-          : 'bg-transparent'
+          : 'bg-transparent',
       )}
     >
       <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
+
         {/* Logo */}
-        <Link href="/" className="flex items-center gap-2 group">
+        <Link href="/" className="flex items-center gap-2.5 group shrink-0">
           <motion.div
-            whileHover={{ scale: 1.1, rotate: -5 }}
+            whileHover={{ scale: 1.08, rotate: -6 }}
             whileTap={{ scale: 0.95 }}
-            className="w-9 h-9 bg-amber-500 rounded-xl flex items-center justify-center glow-amber"
+            className="w-9 h-9 bg-amber-500 rounded-xl flex items-center
+                       justify-center shadow-lg shadow-amber-500/30"
           >
             <Truck className="w-5 h-5 text-black" />
           </motion.div>
           <motion.span
-            initial={{ opacity: 0, x: -10 }}
+            initial={{ opacity: 0, x: -8 }}
             animate={{ opacity: 1, x: 0 }}
-            className="font-black text-xl text-gradient"
+            transition={{ delay: 0.1 }}
+            className="font-black text-xl text-gradient hidden sm:block"
           >
             GLos Logistics
           </motion.span>
         </Link>
 
         {/* Desktop nav */}
-        <nav className="hidden md:flex items-center gap-1">
+        <nav className="hidden md:flex items-center gap-0.5">
           {navLinks.map((link, i) => {
             const isActive = pathname === link.href
             return (
               <motion.div
                 key={link.href}
-                initial={{ opacity: 0, y: -10 }}
+                initial={{ opacity: 0, y: -8 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.05 * i }}
+                transition={{ delay: 0.04 * i, duration: 0.3 }}
               >
                 <Link
                   href={link.href}
                   className={cn(
-                    'relative px-4 py-2 rounded-lg text-sm font-medium transition-colors',
-                    isActive ? 'text-amber-400' : 'text-zinc-400 hover:text-white'
+                    'relative px-3.5 py-2 rounded-lg text-sm font-medium',
+                    'transition-colors duration-150',
+                    isActive
+                      ? 'text-amber-400'
+                      : 'text-zinc-400 hover:text-white',
                   )}
                 >
-                  {link.label}
                   {isActive && (
-                    <motion.div
+                    <motion.span
                       layoutId="navbar-indicator"
-                      className="absolute inset-0 bg-amber-500/10 rounded-lg border border-amber-500/20"
-                      transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+                      className="absolute inset-0 bg-amber-500/10 rounded-lg
+                                 border border-amber-500/20"
+                      transition={{ type: 'spring', stiffness: 380, damping: 32 }}
                     />
                   )}
+                  <span className="relative z-10">{link.label}</span>
                 </Link>
               </motion.div>
             )
@@ -94,23 +107,23 @@ export function Navbar() {
         </nav>
 
         {/* CTA */}
-        <div className="hidden md:flex items-center gap-2">
+        <div className="hidden md:flex items-center gap-2 shrink-0">
           <Link href="/login">
             <Button
-              variant="ghost"
-              size="sm"
+              variant="ghost" size="sm"
               className="text-zinc-400 hover:text-white"
             >
               Zaloguj
             </Button>
           </Link>
           <Link href="/hub">
-            <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
+            <motion.div whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }}>
               <Button
                 size="sm"
-                className="bg-amber-500 text-black hover:bg-amber-400 font-bold gap-1.5"
+                className="bg-amber-500 text-black hover:bg-amber-400
+                           font-bold gap-1.5 shadow-md shadow-amber-500/25"
               >
-                <Truck className="w-3.5 h-3.5" />
+                <Gauge className="w-3.5 h-3.5" />
                 Hub
               </Button>
             </motion.div>
