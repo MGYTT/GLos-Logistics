@@ -1,6 +1,6 @@
 'use client'
+
 import { useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -11,8 +11,8 @@ import {
   Search, Filter
 } from 'lucide-react'
 import { cn } from '@/lib/utils/cn'
-import { sendDiscordWebhook } from '@/lib/discord/bot'
 import { motion, AnimatePresence } from 'framer-motion'
+import { acceptApplication, rejectApplication } from './actions'
 
 interface Application {
   id: string
@@ -27,21 +27,20 @@ interface Application {
   created_at: string
 }
 
-type Filter = 'all' | 'pending' | 'accepted' | 'rejected'
+type FilterType = 'all' | 'pending' | 'accepted' | 'rejected'
 
 const statusConfig = {
-  pending:  { label: 'Oczekuje',  color: 'text-amber-400', bg: 'bg-amber-400/10 border-amber-400/20',  icon: Clock        },
-  accepted: { label: 'Przyjęty',  color: 'text-green-400', bg: 'bg-green-400/10 border-green-400/20',  icon: CheckCircle2 },
-  rejected: { label: 'Odrzucony', color: 'text-red-400',   bg: 'bg-red-400/10   border-red-400/20',    icon: XCircle      },
+  pending:  { label: 'Oczekuje',  color: 'text-amber-400', bg: 'bg-amber-400/10 border-amber-400/20', icon: Clock        },
+  accepted: { label: 'Przyjęty',  color: 'text-green-400', bg: 'bg-green-400/10 border-green-400/20', icon: CheckCircle2 },
+  rejected: { label: 'Odrzucony', color: 'text-red-400',   bg: 'bg-red-400/10   border-red-400/20',   icon: XCircle      },
 }
 
 export function RecruitmentPanel({ applications: initial }: { applications: Application[] }) {
   const [applications, setApplications] = useState(initial)
   const [expanded, setExpanded]         = useState<string | null>(null)
-  const [filter, setFilter]             = useState<Filter>('pending')
+  const [filter, setFilter]             = useState<FilterType>('pending')
   const [search, setSearch]             = useState('')
   const [loading, setLoading]           = useState<string | null>(null)
-  const supabase = createClient()
 
   const counts = {
     all:      applications.length,
@@ -53,75 +52,28 @@ export function RecruitmentPanel({ applications: initial }: { applications: Appl
   const filtered = applications
     .filter(a => filter === 'all' || a.status === filter)
     .filter(a =>
-      a.username.toLowerCase().includes(search.toLowerCase()) ||
+      a.username.toLowerCase().includes(search.toLowerCase())    ||
       a.discord_tag.toLowerCase().includes(search.toLowerCase()) ||
       a.steam_id.toLowerCase().includes(search.toLowerCase())
     )
 
   async function updateStatus(id: string, status: 'accepted' | 'rejected', app: Application) {
     setLoading(id)
-
-    const { error } = await supabase
-      .from('applications')
-      .update({ status })
-      .eq('id', id)
-
-    if (error) {
-      toast.error('Błąd aktualizacji statusu')
-      setLoading(null)
-      return
-    }
-
-    // Przy akceptacji utwórz rekord w members
-    if (status === 'accepted' && app.user_id) {
-      const { error: memberError } = await supabase
-        .from('members')
-        .upsert({
-          id:         app.user_id,
-          username:   app.username,
-          steam_id:   app.steam_id,
-          discord_id: app.discord_tag,
-          rank:       'Recruit',
-          points:     0,
-          joined_at:  new Date().toISOString(),
-          is_banned:  false,
-        }, { onConflict: 'id', ignoreDuplicates: true })
-
-      if (memberError) {
-        toast.error('Błąd tworzenia konta: ' + memberError.message)
-        setLoading(null)
-        return
+    try {
+      if (status === 'accepted') {
+        await acceptApplication(id)
+        toast.success(`🎉 ${app.username} przyjęty! Konto aktywowane.`)
+      } else {
+        await rejectApplication(id)
+        toast.info(`Podanie ${app.username} odrzucone`)
       }
-
-      await sendDiscordWebhook({
-        title: '✅ Nowy kierowca dołączył do VTC!',
-        color: 0x22c55e,
-        fields: [
-          { name: 'Nick',        value: app.username,              inline: true  },
-          { name: 'Discord',     value: app.discord_tag,           inline: true  },
-          { name: 'Steam ID',    value: app.steam_id,              inline: false },
-          { name: 'Godziny',     value: `${app.ets2_hours}h ETS2`, inline: true  },
-        ],
-      })
-
-      toast.success(`🎉 ${app.username} przyjęty! Konto aktywowane.`)
+      setApplications(prev => prev.map(a => a.id === id ? { ...a, status } : a))
+      setExpanded(null)
+    } catch (err: any) {
+      toast.error(err.message ?? 'Wystąpił błąd')
+    } finally {
+      setLoading(null)
     }
-
-    if (status === 'rejected') {
-      await sendDiscordWebhook({
-        title: '❌ Podanie odrzucone',
-        color: 0xef4444,
-        fields: [
-          { name: 'Nick',    value: app.username,    inline: true },
-          { name: 'Discord', value: app.discord_tag, inline: true },
-        ],
-      })
-      toast.info(`Podanie ${app.username} odrzucone`)
-    }
-
-    setApplications(prev => prev.map(a => a.id === id ? { ...a, status } : a))
-    setExpanded(null)
-    setLoading(null)
   }
 
   return (
@@ -140,7 +92,7 @@ export function RecruitmentPanel({ applications: initial }: { applications: Appl
         </div>
 
         <div className="flex gap-1.5 flex-wrap">
-          {(['all', 'pending', 'accepted', 'rejected'] as Filter[]).map(f => {
+          {(['all', 'pending', 'accepted', 'rejected'] as FilterType[]).map(f => {
             const cfg = f !== 'all' ? statusConfig[f] : null
             return (
               <button
@@ -182,7 +134,7 @@ export function RecruitmentPanel({ applications: initial }: { applications: Appl
           </div>
         ) : (
           filtered.map(app => {
-            const cfg       = statusConfig[app.status]
+            const cfg        = statusConfig[app.status]
             const StatusIcon = cfg.icon
             const isExpanded = expanded === app.id
             const isLoading  = loading === app.id
@@ -273,7 +225,7 @@ export function RecruitmentPanel({ applications: initial }: { applications: Appl
                   )}
 
                   {isExpanded
-                    ? <ChevronUp className="w-4 h-4 text-zinc-500 shrink-0" />
+                    ? <ChevronUp   className="w-4 h-4 text-zinc-500 shrink-0" />
                     : <ChevronDown className="w-4 h-4 text-zinc-500 shrink-0" />
                   }
                 </div>
@@ -338,7 +290,7 @@ export function RecruitmentPanel({ applications: initial }: { applications: Appl
                           </p>
                         </div>
 
-                        {/* Akcje dla odrzuconych (możliwość zmiany decyzji) */}
+                        {/* Zmiana decyzji dla odrzuconych */}
                         {app.status === 'rejected' && (
                           <div className="flex items-center gap-2 pt-1">
                             <span className="text-xs text-zinc-500">Zmień decyzję:</span>
@@ -354,7 +306,7 @@ export function RecruitmentPanel({ applications: initial }: { applications: Appl
                           </div>
                         )}
 
-                        {/* Akcje dla accepted (możliwość zmiany decyzji) */}
+                        {/* Zmiana decyzji dla przyjętych */}
                         {app.status === 'accepted' && (
                           <div className="flex items-center gap-2 pt-1">
                             <span className="text-xs text-zinc-500">Zmień decyzję:</span>
@@ -379,7 +331,7 @@ export function RecruitmentPanel({ applications: initial }: { applications: Appl
         )}
       </div>
 
-      {/* Footer z liczbą */}
+      {/* Footer */}
       {filtered.length > 0 && (
         <p className="text-xs text-zinc-600 text-right">
           Wyświetlono {filtered.length} z {applications.length} podań

@@ -22,13 +22,10 @@ export async function middleware(request: NextRequest) {
   }
 
   // ── 2. Bypass dla Server Actions ─────────────────────────
-  // Server Actions to POST z headerem 'next-action'
-  // Middleware NIE może ich redirectować — dostałyby HTML zamiast RSC payload
   const isServerAction =
     request.method === 'POST' &&
     request.headers.get('next-action') !== null
   if (isServerAction) {
-    // Tylko odśwież sesję Supabase, bez żadnej logiki routingu
     const { supabaseResponse } = await updateSession(request)
     return supabaseResponse
   }
@@ -49,7 +46,6 @@ export async function middleware(request: NextRequest) {
       path === '/login'
 
     if (!isAllowedDuringMaintenance) {
-      // Sprawdź rangę tylko jeśli zalogowany
       const isPrivileged = user
         ? await supabase
             .from('members')
@@ -91,7 +87,7 @@ export async function middleware(request: NextRequest) {
       .eq('user_id', user.id)
       .order('created_at', { ascending: false })
       .limit(1)
-      .maybeSingle(),               // ← maybeSingle zamiast single (nie rzuca błędu gdy brak)
+      .maybeSingle(),
   ])
 
   // ── 8. Zbanowany ─────────────────────────────────────────
@@ -123,12 +119,28 @@ export async function middleware(request: NextRequest) {
   // ── 11. /hub i chronione trasy ───────────────────────────
   if (path.startsWith('/hub')) {
     if (isAdmin) return supabaseResponse
-    if (!appStatus || appStatus === 'rejected') {
+
+    // Zaakceptowany ale brak rekordu w members → utwórz automatycznie
+    if (!member && appStatus === 'accepted') {
+      await supabase.from('members').upsert({
+        id:         user.id,
+        username:   user.email?.split('@')[0] ?? 'Driver',
+        rank:       'Recruit',
+        points:     0,
+        is_banned:  false,
+      }, { onConflict: 'id', ignoreDuplicates: true })
+      return supabaseResponse
+    }
+
+    if (!member || !appStatus || appStatus === 'rejected') {
       return NextResponse.redirect(new URL('/apply', request.url))
     }
+
     if (appStatus === 'pending') {
       return NextResponse.redirect(new URL('/pending', request.url))
     }
+
+    return supabaseResponse
   }
 
   return supabaseResponse
