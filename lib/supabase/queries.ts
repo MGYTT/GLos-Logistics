@@ -48,7 +48,6 @@ export async function getWeeklyRankings(
     return (data as RankingRPCRow[]).map(mapRankingRow)
   }
 
-  // ── Loguj szczegółowy błąd ─────────────────
   if (error) {
     console.error('[getWeeklyRankings] RPC error:', {
       message: error.message,
@@ -58,8 +57,8 @@ export async function getWeeklyRankings(
     })
   }
 
-  // ── Fallback: bezpośrednie zapytanie ────────
-  console.warn('[getWeeklyRankings] Używam fallbacku — zapytanie bezpośrednie')
+  // ── Fallback ────────────────────────────────
+  console.warn('[getWeeklyRankings] Używam fallbacku')
 
   const periodFrom = period === 'week'
     ? new Date(Date.now() - 7  * 24 * 60 * 60 * 1000).toISOString()
@@ -72,23 +71,29 @@ export async function getWeeklyRankings(
     .select('id, username, avatar_url, rank')
     .eq('is_banned', false)
 
-  if (mErr || !members) {
-    console.error('[getWeeklyRankings] Fallback members error:', mErr)
-    return []
+  if (mErr || !members) return []
+
+  // Pobierz WSZYSTKIE ukończone joby — bez filtra completed_at jeśli 'all'
+  let jobsQuery = supabase
+    .from('jobs')
+    .select('member_id, created_by, distance_km, income, pay, completed_at')
+    .eq('status', 'completed')
+
+  // Dla week/month filtruj po completed_at LUB created_at (bo completed_at może być null)
+  if (period !== 'all') {
+    jobsQuery = jobsQuery.or(
+      `completed_at.gte.${periodFrom},and(completed_at.is.null,created_at.gte.${periodFrom})`
+    )
   }
 
-  const { data: jobs, error: jErr } = await supabase
-    .from('jobs')
-    .select('member_id, distance_km, income, pay')
-    .eq('status', 'completed')
-    .gte('completed_at', periodFrom)
+  const { data: jobs, error: jErr } = await jobsQuery
 
   if (jErr) {
     console.error('[getWeeklyRankings] Fallback jobs error:', jErr)
     return []
   }
 
-  // Agreguj po member_id
+  // Agreguj — uwzględnij ZARÓWNO member_id jak i created_by
   const statsMap = new Map<string, {
     total_distance: number
     total_income:   number
@@ -96,29 +101,37 @@ export async function getWeeklyRankings(
   }>()
 
   for (const job of jobs ?? []) {
-    const prev = statsMap.get(job.member_id) ?? {
+    // Użyj member_id, jeśli brak — created_by
+    const driverId = job.member_id ?? job.created_by
+    if (!driverId) continue
+
+    const prev = statsMap.get(driverId) ?? {
       total_distance: 0,
       total_income:   0,
       job_count:      0,
     }
-    statsMap.set(job.member_id, {
-      total_distance: prev.total_distance + (job.distance_km ?? 0),
-      total_income:   prev.total_income   + (job.income ?? job.pay ?? 0),
+    statsMap.set(driverId, {
+      total_distance: prev.total_distance + Number(job.distance_km ?? 0),
+      total_income:   prev.total_income   + Number(job.income ?? job.pay ?? 0),
       job_count:      prev.job_count      + 1,
     })
   }
 
+  if (statsMap.size === 0) {
+    console.warn('[getWeeklyRankings] Brak jobów po agregacji — sprawdź kolumnę member_id w tabeli jobs')
+  }
+
   return members
-    .filter(m => statsMap.has(m.id))   // tylko kierowcy z jobami
+    .filter(m => statsMap.has(m.id))
     .map(m => {
       const stats = statsMap.get(m.id)!
       return {
         member_id:      m.id,
-        username:       m.username      ?? 'Nieznany',
-        avatar_url:     m.avatar_url    ?? null,
-        rank:           (m.rank         ?? 'recruit') as MemberRank,
-        total_distance: stats.total_distance,
-        total_income:   stats.total_income,
+        username:       m.username   ?? 'Nieznany',
+        avatar_url:     m.avatar_url ?? null,
+        rank:           (m.rank      ?? 'recruit') as MemberRank,
+        total_distance: Math.round(stats.total_distance),
+        total_income:   Math.round(stats.total_income),
         job_count:      stats.job_count,
       }
     })
