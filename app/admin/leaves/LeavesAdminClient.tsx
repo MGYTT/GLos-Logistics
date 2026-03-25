@@ -1,22 +1,23 @@
 'use client'
 
-import { useState, useMemo }       from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
-import { toast }                   from 'sonner'
+import { useState, useMemo }        from 'react'
+import { useRouter }                from 'next/navigation'
+import { motion, AnimatePresence }  from 'framer-motion'
+import { toast }                    from 'sonner'
 import { format, differenceInDays } from 'date-fns'
-import { pl }                      from 'date-fns/locale'
+import { pl }                       from 'date-fns/locale'
 import {
   Umbrella, Stethoscope, UmbrellaOff, ShieldAlert,
   Clock, CheckCircle2, XCircle, Search, Filter,
-  Plus, Users, CalendarDays, TrendingUp, AlertCircle,
-  Check, X, Eye, ChevronDown,
+  CalendarDays, TrendingUp, AlertCircle,
+  Check, X, Eye,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input }  from '@/components/ui/input'
 import { cn }     from '@/lib/utils/cn'
 import type { MemberLeave, LeaveType, LeaveStatus } from '@/types'
 import { LEAVE_LABELS, LEAVE_COLORS } from '@/lib/vtc/payCalculator'
-import { reviewLeave, forceLeave } from './actions'
+import { reviewLeave, forceLeave }    from './actions'
 
 // ─── Typy ──────────────────────────────────────────────────
 interface MemberRow {
@@ -44,8 +45,8 @@ interface Props {
   }
 }
 
-type Tab    = 'all' | 'pending' | 'active' | 'history'
-type Modal  = 'review' | 'force' | 'detail' | null
+type Tab   = 'all' | 'pending' | 'active' | 'history'
+type Modal = 'review' | 'force' | 'detail' | null
 
 // ─── Helpers ───────────────────────────────────────────────
 const LEAVE_ICONS: Record<LeaveType, React.ElementType> = {
@@ -58,11 +59,11 @@ const LEAVE_ICONS: Record<LeaveType, React.ElementType> = {
 const STATUS_CONFIG: Record<LeaveStatus, {
   label: string; color: string; bg: string; icon: React.ElementType
 }> = {
-  pending:  { label: 'Oczekuje',     color: 'text-amber-400', bg: 'bg-amber-400/10',  icon: Clock        },
-  approved: { label: 'Zatwierdzony', color: 'text-green-400', bg: 'bg-green-400/10',  icon: CheckCircle2 },
-  active:   { label: 'Aktywny',      color: 'text-blue-400',  bg: 'bg-blue-400/10',   icon: CheckCircle2 },
-  rejected: { label: 'Odrzucony',    color: 'text-red-400',   bg: 'bg-red-400/10',    icon: XCircle      },
-  ended:    { label: 'Zakończony',   color: 'text-zinc-500',  bg: 'bg-zinc-500/10',   icon: CheckCircle2 },
+  pending:  { label: 'Oczekuje',     color: 'text-amber-400', bg: 'bg-amber-400/10', icon: Clock        },
+  approved: { label: 'Zatwierdzony', color: 'text-green-400', bg: 'bg-green-400/10', icon: CheckCircle2 },
+  active:   { label: 'Aktywny',      color: 'text-blue-400',  bg: 'bg-blue-400/10',  icon: CheckCircle2 },
+  rejected: { label: 'Odrzucony',    color: 'text-red-400',   bg: 'bg-red-400/10',   icon: XCircle      },
+  ended:    { label: 'Zakończony',   color: 'text-zinc-500',  bg: 'bg-zinc-500/10',  icon: CheckCircle2 },
 }
 
 function Avatar({ url, name }: { url: string | null; name: string }) {
@@ -81,7 +82,7 @@ function leaveDays(leave: MemberLeave) {
   return differenceInDays(new Date(leave.end_date), new Date(leave.start_date)) + 1
 }
 
-// ─── Modal szczegółów + recenzji ──────────────────────────
+// ─── Modal rozpatrzenia wniosku ────────────────────────────
 function ReviewModal({
   leave,
   onClose,
@@ -130,7 +131,6 @@ function ReviewModal({
           </div>
         </div>
 
-        {/* Info o wniosku */}
         <div className="bg-zinc-800/50 rounded-xl p-4 space-y-2.5 mb-4">
           <div className="flex items-center gap-3">
             <Avatar url={leave.member?.avatar_url ?? null} name={leave.member?.username ?? '?'} />
@@ -172,7 +172,6 @@ function ReviewModal({
           )}
         </div>
 
-        {/* Notatka admina */}
         <div className="space-y-1.5 mb-5">
           <label className="text-xs text-zinc-400 uppercase tracking-wider font-semibold">
             Notatka admina <span className="normal-case text-zinc-600">(opcjonalnie)</span>
@@ -288,7 +287,6 @@ function ForceLeaveModal({
         </div>
 
         <div className="space-y-3">
-          {/* Kierowca */}
           <div className="space-y-1.5">
             <label className="text-xs text-zinc-400 uppercase tracking-wider font-semibold">
               Kierowca
@@ -307,12 +305,9 @@ function ForceLeaveModal({
             </select>
           </div>
 
-          {/* Daty */}
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <label className="text-xs text-zinc-400 uppercase tracking-wider font-semibold">
-                Od
-              </label>
+              <label className="text-xs text-zinc-400 uppercase tracking-wider font-semibold">Od</label>
               <Input
                 type="date"
                 value={startDate}
@@ -321,9 +316,7 @@ function ForceLeaveModal({
               />
             </div>
             <div className="space-y-1.5">
-              <label className="text-xs text-zinc-400 uppercase tracking-wider font-semibold">
-                Do
-              </label>
+              <label className="text-xs text-zinc-400 uppercase tracking-wider font-semibold">Do</label>
               <Input
                 type="date"
                 value={endDate}
@@ -343,7 +336,6 @@ function ForceLeaveModal({
             </div>
           )}
 
-          {/* Notatka / Powód */}
           <div className="space-y-1.5">
             <label className="text-xs text-zinc-400 uppercase tracking-wider font-semibold">
               Powód
@@ -417,31 +409,25 @@ function LeaveRow({
       animate={{ opacity: 1, y: 0 }}
       className="flex items-center gap-3 px-5 py-4 hover:bg-white/[0.02] transition-colors"
     >
-      {/* Ikona typu */}
       <div className={cn('w-9 h-9 rounded-xl flex items-center justify-center shrink-0',
         LEAVE_COLORS[leave.type].bg)}>
         <Icon className={cn('w-4 h-4', LEAVE_COLORS[leave.type].color)} />
       </div>
 
-      {/* Kierowca */}
       <div className="flex items-center gap-2.5 w-40 shrink-0">
         <Avatar url={leave.member?.avatar_url ?? null} name={leave.member?.username ?? '?'} />
         <div className="min-w-0">
-          <p className="text-sm font-semibold truncate">
-            {leave.member?.username ?? '—'}
-          </p>
+          <p className="text-sm font-semibold truncate">{leave.member?.username ?? '—'}</p>
           <p className="text-xs text-zinc-600">{leave.member?.rank}</p>
         </div>
       </div>
 
-      {/* Typ */}
       <div className="hidden md:block w-32 shrink-0">
         <span className={cn('text-xs font-medium', LEAVE_COLORS[leave.type].color)}>
           {LEAVE_LABELS[leave.type]}
         </span>
       </div>
 
-      {/* Daty */}
       <div className="flex-1 min-w-0">
         <p className="text-sm text-zinc-300">
           {format(new Date(leave.start_date), 'd MMM', { locale: pl })}
@@ -456,7 +442,6 @@ function LeaveRow({
         </p>
       </div>
 
-      {/* Status */}
       <div className="shrink-0">
         <span className={cn(
           'inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-full',
@@ -467,7 +452,6 @@ function LeaveRow({
         </span>
       </div>
 
-      {/* Akcje */}
       <div className="flex items-center gap-1 shrink-0">
         <button
           onClick={() => onDetail(leave)}
@@ -496,19 +480,25 @@ function LeaveRow({
 
 // ─── Główny komponent ──────────────────────────────────────
 export function LeavesAdminClient({ leaves: initial, members, adminId, stats }: Props) {
-  const [leaves,       setLeaves]       = useState(initial)
-  const [tab,          setTab]          = useState<Tab>('all')
-  const [search,       setSearch]       = useState('')
-  const [typeFilter,   setTypeFilter]   = useState<LeaveType | 'all'>('all')
-  const [modal,        setModal]        = useState<Modal>(null)
-  const [selected,     setSelected]     = useState<MemberLeave | null>(null)
+  const router = useRouter()
+
+  const [leaves,     setLeaves]     = useState(initial)
+  const [tab,        setTab]        = useState<Tab>('all')
+  const [search,     setSearch]     = useState('')
+  const [typeFilter, setTypeFilter] = useState<LeaveType | 'all'>('all')
+  const [modal,      setModal]      = useState<Modal>(null)
+  const [selected,   setSelected]   = useState<MemberLeave | null>(null)
 
   const today = new Date().toISOString().split('T')[0]
+
+  // Odświeża dane Server Component bez pełnego reload strony
+  function refresh() {
+    router.refresh()
+  }
 
   const filtered = useMemo(() => {
     let list = leaves
 
-    // Tab
     if (tab === 'pending') list = list.filter(l => l.status === 'pending')
     if (tab === 'active')  list = list.filter(l =>
       ['approved', 'active'].includes(l.status) &&
@@ -518,10 +508,8 @@ export function LeavesAdminClient({ leaves: initial, members, adminId, stats }: 
       ['rejected', 'ended'].includes(l.status) || l.end_date < today
     )
 
-    // Typ
     if (typeFilter !== 'all') list = list.filter(l => l.type === typeFilter)
 
-    // Szukaj
     if (search) list = list.filter(l =>
       l.member?.username.toLowerCase().includes(search.toLowerCase())
     )
@@ -530,10 +518,10 @@ export function LeavesAdminClient({ leaves: initial, members, adminId, stats }: 
   }, [leaves, tab, typeFilter, search, today])
 
   const tabs: { id: Tab; label: string; count?: number }[] = [
-    { id: 'all',     label: 'Wszystkie',  count: leaves.length      },
-    { id: 'pending', label: 'Oczekujące', count: stats.pending      },
-    { id: 'active',  label: 'Aktywne',    count: stats.activeNow    },
-    { id: 'history', label: 'Historia'                               },
+    { id: 'all',     label: 'Wszystkie',  count: leaves.length   },
+    { id: 'pending', label: 'Oczekujące', count: stats.pending   },
+    { id: 'active',  label: 'Aktywne',    count: stats.activeNow },
+    { id: 'history', label: 'Historia'                           },
   ]
 
   return (
@@ -556,76 +544,53 @@ export function LeavesAdminClient({ leaves: initial, members, adminId, stats }: 
         </Button>
       </div>
 
-      {/* Statystyki */}
+      {/* Statystyki główne */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-  {[
-    {
-      label: 'Na urlopie teraz',
-      value: stats.activeNow,
-      icon:  Umbrella,
-      color: 'text-blue-400',
-      bg:    'bg-blue-400/10',
-    },
-    {
-      label: 'Oczekujące wnioski',
-      value: stats.pending,
-      icon:  Clock,
-      color: stats.pending > 0 ? 'text-amber-400' : 'text-zinc-500',
-      bg:    stats.pending > 0 ? 'bg-amber-400/10' : 'bg-zinc-500/10',
-    },
-    {
-      label: 'W tym miesiącu',
-      value: stats.thisMonth,
-      icon:  CalendarDays,
-      color: 'text-green-400',
-      bg:    'bg-green-400/10',
-    },
-    {
-      label: 'Łącznie wniosków',
-      value: stats.total,
-      icon:  TrendingUp,
-      color: 'text-zinc-400',
-      bg:    'bg-zinc-400/10',
-    },
-  ].map(({ label, value, icon: Icon, color, bg }) => (
-    <div key={label}
-      className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-5
-                 flex items-center gap-4">
-      <div className={cn('w-11 h-11 rounded-xl flex items-center justify-center shrink-0', bg)}>
-        <Icon className={cn('w-5 h-5', color)} />
+        {[
+          { label: 'Na urlopie teraz',   value: stats.activeNow, icon: Umbrella,     color: 'text-blue-400',                                      bg: 'bg-blue-400/10'                                      },
+          { label: 'Oczekujące wnioski', value: stats.pending,   icon: Clock,        color: stats.pending > 0 ? 'text-amber-400' : 'text-zinc-500', bg: stats.pending > 0 ? 'bg-amber-400/10' : 'bg-zinc-500/10' },
+          { label: 'W tym miesiącu',     value: stats.thisMonth, icon: CalendarDays, color: 'text-green-400',                                     bg: 'bg-green-400/10'                                     },
+          { label: 'Łącznie wniosków',   value: stats.total,     icon: TrendingUp,   color: 'text-zinc-400',                                      bg: 'bg-zinc-400/10'                                      },
+        ].map(({ label, value, icon: Icon, color, bg }) => (
+          <div key={label}
+            className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-5
+                       flex items-center gap-4">
+            <div className={cn('w-11 h-11 rounded-xl flex items-center justify-center shrink-0', bg)}>
+              <Icon className={cn('w-5 h-5', color)} />
+            </div>
+            <div>
+              <p className="text-xs text-zinc-500 uppercase tracking-wider">{label}</p>
+              <p className={cn('text-2xl font-black mt-0.5', color)}>{value}</p>
+            </div>
+          </div>
+        ))}
       </div>
-      <div>
-        <p className="text-xs text-zinc-500 uppercase tracking-wider">{label}</p>
-        <p className={cn('text-2xl font-black mt-0.5', color)}>{value}</p>
+
+      {/* Statystyki wg typu */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {([
+          { type: 'paid',   label: 'Urlop płatny', icon: Umbrella    },
+          { type: 'sick',   label: 'L4',           icon: Stethoscope },
+          { type: 'unpaid', label: 'Bezpłatny',    icon: UmbrellaOff },
+          { type: 'forced', label: 'Przymusowe',   icon: ShieldAlert },
+        ] as const).map(({ type, label, icon: Icon }) => (
+          <div key={type}
+            className={cn(
+              'flex items-center gap-3 p-3 rounded-xl border',
+              LEAVE_COLORS[type].bg,
+              LEAVE_COLORS[type].border,
+            )}>
+            <Icon className={cn('w-4 h-4 shrink-0', LEAVE_COLORS[type].color)} />
+            <div>
+              <p className="text-xs text-zinc-500">{label}</p>
+              <p className={cn('text-lg font-black', LEAVE_COLORS[type].color)}>
+                {stats.byType[type]}
+              </p>
+            </div>
+          </div>
+        ))}
       </div>
-    </div>
-  ))}
-</div>
-<div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-  {(
-    [
-      { type: 'paid',   label: 'Urlop płatny',    icon: Umbrella    },
-      { type: 'sick',   label: 'L4',              icon: Stethoscope },
-      { type: 'unpaid', label: 'Bezpłatny',       icon: UmbrellaOff },
-      { type: 'forced', label: 'Przymusowe',      icon: ShieldAlert },
-    ] as const
-  ).map(({ type, label, icon: Icon }) => (
-    <div key={type}
-      className={cn(
-        'flex items-center gap-3 p-3 rounded-xl border',
-        LEAVE_COLORS[type].bg,
-        LEAVE_COLORS[type].border,
-      )}>
-      <Icon className={cn('w-4 h-4 shrink-0', LEAVE_COLORS[type].color)} />
-      <div>
-        <p className="text-xs text-zinc-500">{label}</p>
-        <p className={cn('text-lg font-black', LEAVE_COLORS[type].color)}>
-          {stats.byType[type]}
-        </p>
-      </div>
-    </div>
-  ))}
-</div>
+
       {/* Baner oczekujących */}
       {stats.pending > 0 && (
         <motion.div
@@ -715,7 +680,6 @@ export function LeavesAdminClient({ leaves: initial, members, adminId, stats }: 
 
       {/* Tabela */}
       <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl overflow-hidden">
-        {/* Nagłówek tabeli */}
         <div className="hidden md:grid grid-cols-[auto_1fr_auto_auto_auto_auto] gap-4
                         px-5 py-3 border-b border-zinc-800
                         text-xs text-zinc-500 uppercase tracking-wider font-semibold">
@@ -759,7 +723,7 @@ export function LeavesAdminClient({ leaves: initial, members, adminId, stats }: 
           <ReviewModal
             leave={selected}
             onClose={() => { setModal(null); setSelected(null) }}
-            onDone={() => window.location.reload()}
+            onDone={refresh}
           />
         )}
 
@@ -777,10 +741,10 @@ export function LeavesAdminClient({ leaves: initial, members, adminId, stats }: 
                          p-6 w-full max-w-sm shadow-2xl"
             >
               {(() => {
-                const Icon = LEAVE_ICONS[selected.type]
-                const sc   = STATUS_CONFIG[selected.status]
+                const Icon       = LEAVE_ICONS[selected.type]
+                const sc         = STATUS_CONFIG[selected.status]
                 const StatusIcon = sc.icon
-                const days = leaveDays(selected)
+                const days       = leaveDays(selected)
                 return (
                   <>
                     <div className="flex items-center gap-3 mb-5">
@@ -802,8 +766,10 @@ export function LeavesAdminClient({ leaves: initial, members, adminId, stats }: 
 
                     <div className="space-y-3">
                       <div className="flex items-center gap-3 p-3 bg-zinc-800/50 rounded-xl">
-                        <Avatar url={selected.member?.avatar_url ?? null}
-                          name={selected.member?.username ?? '?'} />
+                        <Avatar
+                          url={selected.member?.avatar_url ?? null}
+                          name={selected.member?.username ?? '?'}
+                        />
                         <div>
                           <p className="text-sm font-semibold">{selected.member?.username}</p>
                           <p className="text-xs text-zinc-500">{selected.member?.rank}</p>
@@ -811,10 +777,10 @@ export function LeavesAdminClient({ leaves: initial, members, adminId, stats }: 
                       </div>
 
                       {[
-                        { label: 'Od',            value: format(new Date(selected.start_date), 'd MMMM yyyy', { locale: pl }) },
-                        { label: 'Do',            value: format(new Date(selected.end_date),   'd MMMM yyyy', { locale: pl }) },
-                        { label: 'Czas trwania',  value: `${days} ${days === 1 ? 'dzień' : 'dni'}` },
-                        { label: 'Złożono',       value: format(new Date(selected.created_at), 'd MMM yyyy, HH:mm', { locale: pl }) },
+                        { label: 'Od',           value: format(new Date(selected.start_date), 'd MMMM yyyy', { locale: pl }) },
+                        { label: 'Do',           value: format(new Date(selected.end_date),   'd MMMM yyyy', { locale: pl }) },
+                        { label: 'Czas trwania', value: `${days} ${days === 1 ? 'dzień' : 'dni'}` },
+                        { label: 'Złożono',      value: format(new Date(selected.created_at), 'd MMM yyyy, HH:mm', { locale: pl }) },
                       ].map(({ label, value }) => (
                         <div key={label} className="flex items-center justify-between
                                                     py-2 border-b border-zinc-800/60 last:border-0">
@@ -866,7 +832,7 @@ export function LeavesAdminClient({ leaves: initial, members, adminId, stats }: 
           <ForceLeaveModal
             members={members}
             onClose={() => setModal(null)}
-            onDone={() => window.location.reload()}
+            onDone={refresh}
           />
         )}
       </AnimatePresence>

@@ -12,7 +12,7 @@ async function requireAdmin() {
   const { data: admin } = await supabase
     .from('members')
     .select('rank, username, id')
-    .eq('id', user.id)
+    .or(`id.eq.${user.id},auth_id.eq.${user.id}`)  // ← naprawione
     .single()
 
   if (!admin || !['Owner', 'Manager'].includes(admin.rank)) return null
@@ -44,13 +44,16 @@ export async function reviewLeave(
         status:      action,
         admin_note:  note ?? null,
         approved_by: admin.id,
+        updated_at:  new Date().toISOString(),
       })
       .eq('id', leaveId)
 
     if (error) return { ok: false, error: error.message }
 
     revalidatePath('/admin/leaves')
+    revalidatePath('/admin')
     revalidatePath('/hub/profile')
+    revalidatePath('/hub')
     return { ok: true }
 
   } catch (e) {
@@ -74,7 +77,6 @@ export async function forceLeave(
     const end   = new Date(end_date)
     if (end < start) return { ok: false, error: 'Data końca przed datą początku' }
 
-    // Sprawdź kolizję
     const { data: conflict } = await supabase
       .from('member_leaves')
       .select('id')
@@ -102,6 +104,7 @@ export async function forceLeave(
     revalidatePath('/admin/leaves')
     revalidatePath('/admin/members')
     revalidatePath('/hub/profile')
+    revalidatePath('/hub')
     return { ok: true }
 
   } catch (e) {
