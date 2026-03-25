@@ -32,9 +32,9 @@ type Member = {
 }
 
 const leaveTypes = [
-  { value: 'vacation',  label: 'Urlop',        icon: Plane     },
-  { value: 'sick',      label: 'Zwolnienie',   icon: Heart     },
-  { value: 'other',     label: 'Inne',         icon: Briefcase },
+  { value: 'paid',   label: 'Urlop płatny',  icon: Plane     },
+  { value: 'unpaid', label: 'Urlop bezpłat.', icon: Briefcase },
+  { value: 'sick',   label: 'Zwolnienie L4', icon: Heart     },
 ]
 
 const statusConfig = {
@@ -48,7 +48,7 @@ export function LeavesClient({ member, leaves: initial }: { member: Member; leav
   const [showForm, setShowForm]   = useState(false)
   const [loading, setLoading]     = useState(false)
   const [form, setForm] = useState({
-    type:       'vacation',
+    type: 'paid',
     start_date: '',
     end_date:   '',
     reason:     '',
