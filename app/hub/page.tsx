@@ -1,15 +1,15 @@
-import { createClient }                        from '@/lib/supabase/server'
-import { getMemberWeekStats, getMemberJobs }    from '@/lib/supabase/queries'
-import { StatsCard }                           from '@/components/dashboard/StatsCard'
-import { RankBadge }                           from '@/components/dashboard/RankBadge'
-import { WeeklyProgress }                      from '@/components/dashboard/WeeklyProgress'
-import { RecentJobs }                          from '@/components/dashboard/RecentJobs'
-import { TelemetryBanner }                     from '@/components/dashboard/TelemetryBanner'
-import { StatsRefresher }                      from '@/components/dashboard/StatsRefresher'
+import { createClient }                     from '@/lib/supabase/server'
+import { getMemberWeekStats, getMemberJobs } from '@/lib/supabase/queries'
+import { StatsCard }                        from '@/components/dashboard/StatsCard'
+import { RankBadge }                        from '@/components/dashboard/RankBadge'
+import { WeeklyProgress }                   from '@/components/dashboard/WeeklyProgress'
+import { RecentJobs }                       from '@/components/dashboard/RecentJobs'
+import { TelemetryBanner }                  from '@/components/dashboard/TelemetryBanner'
+import { StatsRefresher }                   from '@/components/dashboard/StatsRefresher'
 import { Package, MapPin, DollarSign, Trophy } from 'lucide-react'
-import { format }                              from 'date-fns'
-import { pl }                                  from 'date-fns/locale'
-import { redirect }                            from 'next/navigation'
+import { format }                           from 'date-fns'
+import { pl }                               from 'date-fns/locale'
+import { redirect }                         from 'next/navigation'
 
 export const dynamic    = 'force-dynamic'
 export const revalidate = 0
@@ -20,26 +20,22 @@ export default async function HubPage() {
 
   if (!user) redirect('/login')
 
-  // ── Pobierz member po auth_id ────────────────────────────────
-  // auth_id = user.id z Supabase Auth (dodane przez ALTER TABLE)
-  // member.id = własny UUID w tabeli members (używany wszędzie dalej)
+  // Szukaj po id LUB auth_id — obsługuje oba przypadki (stare i nowe konta)
   const { data: member } = await supabase
     .from('members')
     .select('*')
-    .eq('auth_id', user.id)
+    .or(`id.eq.${user.id},auth_id.eq.${user.id}`)
     .maybeSingle()
 
-  if (!member) redirect('/login')
+  // Brak member → /apply, NIE /login (żeby nie było pętli)
+  if (!member) redirect('/apply')
 
   const memberId = member.id
 
-  // ── Równoległe zapytania — wszystko po memberId ───────────────
+  // Równoległe zapytania
   const [weekStats, recentJobs, telemetryResult] = await Promise.all([
-
     getMemberWeekStats(memberId),
-
     getMemberJobs(memberId, 10),
-
     supabase
       .from('member_telemetry')
       .select('*')
@@ -47,9 +43,8 @@ export default async function HubPage() {
       .maybeSingle()
       .then(r => r.data ?? null),
   ])
-console.log('[HUB] memberId:', memberId, '| user.id:', user.id)
 
-  const today = new Date().toISOString().split('T')[0]
+  const today     = new Date().toISOString().split('T')[0]
   const todayJobs = recentJobs.filter(j =>
     j.completed_at?.startsWith(today)
   ).length

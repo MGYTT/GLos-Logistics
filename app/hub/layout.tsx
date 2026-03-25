@@ -1,8 +1,8 @@
-import { HubSidebar }         from '@/components/navigation/HubSidebar'
-import { HubBottomNav }       from '@/components/navigation/HubBottomNav'
-import { MaintenanceBanner }  from '@/components/MaintenanceBanner'
-import { createClient }       from '@/lib/supabase/server'
-import { redirect }           from 'next/navigation'
+import { HubSidebar }        from '@/components/navigation/HubSidebar'
+import { HubBottomNav }      from '@/components/navigation/HubBottomNav'
+import { MaintenanceBanner } from '@/components/MaintenanceBanner'
+import { createClient }      from '@/lib/supabase/server'
+import { redirect }          from 'next/navigation'
 
 export default async function HubLayout({
   children,
@@ -11,6 +11,9 @@ export default async function HubLayout({
 }) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
+
+  // Tylko sprawdź sesję — middleware weryfikuje resztę (member, aplikacja itp.)
+  // NIE redirectuj do /login gdy brak member — to powoduje pętlę /hub ↔ /login
   if (!user) redirect('/login')
 
   return (
