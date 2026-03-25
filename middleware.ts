@@ -9,6 +9,24 @@ const PUBLIC_ROUTES = [
 const APPLY_ROUTES = ['/apply', '/pending']
 const ADMIN_ROUTES = ['/admin']
 
+// Helper — kopiuje cookies Supabase do każdego redirect response
+function redirectWithCookies(
+  url: URL,
+  supabaseResponse: NextResponse
+): NextResponse {
+  const res = NextResponse.redirect(url)
+  supabaseResponse.cookies.getAll().forEach(cookie => {
+    res.cookies.set(cookie.name, cookie.value, {
+      httpOnly: cookie.httpOnly,
+      secure:   cookie.secure,
+      sameSite: cookie.sameSite as any,
+      maxAge:   cookie.maxAge,
+      path:     cookie.path,
+    })
+  })
+  return res
+}
+
 export async function middleware(request: NextRequest) {
   const path = request.nextUrl.pathname
 
@@ -56,7 +74,10 @@ export async function middleware(request: NextRequest) {
         : false
 
       if (!isPrivileged) {
-        return NextResponse.redirect(new URL('/maintenance', request.url))
+        return redirectWithCookies(
+          new URL('/maintenance', request.url),
+          supabaseResponse
+        )
       }
     }
   }
@@ -69,12 +90,13 @@ export async function middleware(request: NextRequest) {
 
   // ── 6. Niezalogowany → login ─────────────────────────────
   if (!user) {
-    return NextResponse.redirect(
-      new URL(`/login?next=${encodeURIComponent(path)}`, request.url)
+    return redirectWithCookies(
+      new URL(`/login?next=${encodeURIComponent(path)}`, request.url),
+      supabaseResponse
     )
   }
 
-  // ── 7. Pobierz profil + WSZYSTKIE podania ────────────────
+  // ── 7. Pobierz profil + wszystkie podania ────────────────
   const [{ data: member }, { data: allApplications }] = await Promise.all([
     supabase
       .from('members')
@@ -90,13 +112,13 @@ export async function middleware(request: NextRequest) {
 
   // ── 8. Zbanowany ─────────────────────────────────────────
   if (member?.is_banned) {
-    return NextResponse.redirect(
-      new URL('/login?error=banned', request.url)
+    return redirectWithCookies(
+      new URL('/login?error=banned', request.url),
+      supabaseResponse
     )
   }
 
-  // Priorytet statusu: accepted > pending > rejected > null
-  // Chroni przed pętlą gdy użytkownik ma wiele podań (np. rejected + accepted)
+  // Priorytet: accepted > pending > rejected > null
   const appStatus: string | null = (() => {
     if (!allApplications || allApplications.length === 0) return null
     if (allApplications.some(a => a.status === 'accepted')) return 'accepted'
@@ -108,25 +130,27 @@ export async function middleware(request: NextRequest) {
 
   // ── 9. /apply i /pending ─────────────────────────────────
   if (APPLY_ROUTES.some(r => path.startsWith(r))) {
-    // Zaakceptowany nie powinien być na /apply ani /pending
     if (appStatus === 'accepted' && member) {
-      return NextResponse.redirect(new URL('/hub', request.url))
+      return redirectWithCookies(
+        new URL('/hub', request.url),
+        supabaseResponse
+      )
     }
-    // Admin zawsze może wejść wszędzie
-    if (isAdmin) return supabaseResponse
-    // Reszta (pending, rejected, null) → zostaje na /apply lub /pending
     return supabaseResponse
   }
 
   // ── 10. Panel admina ─────────────────────────────────────
   if (ADMIN_ROUTES.some(r => path.startsWith(r))) {
     if (!isAdmin) {
-      return NextResponse.redirect(new URL('/hub', request.url))
+      return redirectWithCookies(
+        new URL('/hub', request.url),
+        supabaseResponse
+      )
     }
     return supabaseResponse
   }
 
-  // ── 11. /hub i wszystkie chronione trasy ─────────────────
+  // ── 11. /hub i chronione trasy ───────────────────────────
   if (path.startsWith('/hub')) {
     // Admin zawsze wchodzi
     if (isAdmin) return supabaseResponse
@@ -143,18 +167,24 @@ export async function middleware(request: NextRequest) {
       return supabaseResponse
     }
 
-    // Zaakceptowany z rekordem → wchodzi normalnie
+    // Zaakceptowany z rekordem → wchodzi
     if (appStatus === 'accepted' && member) {
       return supabaseResponse
     }
 
-    // Oczekuje na akceptację → /pending
+    // Oczekuje → /pending
     if (appStatus === 'pending') {
-      return NextResponse.redirect(new URL('/pending', request.url))
+      return redirectWithCookies(
+        new URL('/pending', request.url),
+        supabaseResponse
+      )
     }
 
-    // Brak podania, odrzucony lub brak member → /apply
-    return NextResponse.redirect(new URL('/apply', request.url))
+    // Brak podania / odrzucony → /apply
+    return redirectWithCookies(
+      new URL('/apply', request.url),
+      supabaseResponse
+    )
   }
 
   return supabaseResponse

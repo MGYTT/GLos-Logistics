@@ -13,10 +13,13 @@ export async function updateSession(request: NextRequest) {
           return request.cookies.getAll()
         },
         setAll(cookiesToSet) {
+          // Krok 1: ustaw na request
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value)
           )
+          // Krok 2: utwórz NOWY response z zaktualizowanym requestem
           supabaseResponse = NextResponse.next({ request })
+          // Krok 3: ustaw cookies na response
           cookiesToSet.forEach(({ name, value, options }) =>
             supabaseResponse.cookies.set(name, value, options)
           )
@@ -25,7 +28,6 @@ export async function updateSession(request: NextRequest) {
     }
   )
 
-  // Odśwież sesję — nigdy nie wywołuj redirect() w tym miejscu
   const { data: { user } } = await supabase.auth.getUser()
 
   return { supabaseResponse, user, supabase }
