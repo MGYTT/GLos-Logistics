@@ -25,7 +25,7 @@ export async function updateSession(request: NextRequest) {
     }
   )
 
-  // Odśwież sesję — NIGDY nie wywołuj redirect() tutaj
+  // Odśwież sesję — nigdy nie wywołuj redirect() w tym miejscu
   const { data: { user } } = await supabase.auth.getUser()
 
   return { supabaseResponse, user, supabase }

@@ -12,25 +12,25 @@ const ADMIN_ROUTES = ['/admin']
 export async function middleware(request: NextRequest) {
   const path = request.nextUrl.pathname
 
-  // ── 1. Zawsze przepuść zasoby statyczne ─────────────────
-  const isAsset =
+  // ── 1. Przepuść zasoby statyczne ────────────────────────
+  if (
     path.startsWith('/_next') ||
     path.startsWith('/api')   ||
     path.includes('.')
-  if (isAsset) {
+  ) {
     return NextResponse.next()
   }
 
   // ── 2. Bypass dla Server Actions ─────────────────────────
-  const isServerAction =
+  if (
     request.method === 'POST' &&
     request.headers.get('next-action') !== null
-  if (isServerAction) {
+  ) {
     const { supabaseResponse } = await updateSession(request)
     return supabaseResponse
   }
 
-  // ── 3. Standardowa logika sesji ──────────────────────────
+  // ── 3. Sesja Supabase ────────────────────────────────────
   const { supabaseResponse, user, supabase } = await updateSession(request)
 
   // ── 4. Tryb konserwacji ──────────────────────────────────
@@ -74,8 +74,8 @@ export async function middleware(request: NextRequest) {
     )
   }
 
-  // ── 7. Pobierz profil + podanie ──────────────────────────
-  const [{ data: member }, { data: application }] = await Promise.all([
+  // ── 7. Pobierz profil + WSZYSTKIE podania ────────────────
+  const [{ data: member }, { data: allApplications }] = await Promise.all([
     supabase
       .from('members')
       .select('rank, is_banned')
@@ -85,9 +85,7 @@ export async function middleware(request: NextRequest) {
       .from('applications')
       .select('status')
       .eq('user_id', user.id)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle(),
+      .order('created_at', { ascending: false }),
   ])
 
   // ── 8. Zbanowany ─────────────────────────────────────────
@@ -97,14 +95,26 @@ export async function middleware(request: NextRequest) {
     )
   }
 
-  const appStatus = application?.status ?? null
-  const isAdmin   = ['Manager', 'Owner'].includes(member?.rank ?? '')
+  // Priorytet statusu: accepted > pending > rejected > null
+  // Chroni przed pętlą gdy użytkownik ma wiele podań (np. rejected + accepted)
+  const appStatus: string | null = (() => {
+    if (!allApplications || allApplications.length === 0) return null
+    if (allApplications.some(a => a.status === 'accepted')) return 'accepted'
+    if (allApplications.some(a => a.status === 'pending'))  return 'pending'
+    return 'rejected'
+  })()
+
+  const isAdmin = ['Manager', 'Owner'].includes(member?.rank ?? '')
 
   // ── 9. /apply i /pending ─────────────────────────────────
   if (APPLY_ROUTES.some(r => path.startsWith(r))) {
-    if (appStatus === 'accepted') {
+    // Zaakceptowany nie powinien być na /apply ani /pending
+    if (appStatus === 'accepted' && member) {
       return NextResponse.redirect(new URL('/hub', request.url))
     }
+    // Admin zawsze może wejść wszędzie
+    if (isAdmin) return supabaseResponse
+    // Reszta (pending, rejected, null) → zostaje na /apply lub /pending
     return supabaseResponse
   }
 
@@ -116,31 +126,35 @@ export async function middleware(request: NextRequest) {
     return supabaseResponse
   }
 
-  // ── 11. /hub i chronione trasy ───────────────────────────
+  // ── 11. /hub i wszystkie chronione trasy ─────────────────
   if (path.startsWith('/hub')) {
+    // Admin zawsze wchodzi
     if (isAdmin) return supabaseResponse
 
-    // Zaakceptowany ale brak rekordu w members → utwórz automatycznie
-    if (!member && appStatus === 'accepted') {
+    // Zaakceptowany ale brak rekordu members → utwórz i przepuść
+    if (appStatus === 'accepted' && !member) {
       await supabase.from('members').upsert({
-        id:         user.id,
-        username:   user.email?.split('@')[0] ?? 'Driver',
-        rank:       'Recruit',
-        points:     0,
-        is_banned:  false,
+        id:        user.id,
+        username:  user.email?.split('@')[0] ?? 'Driver',
+        rank:      'Recruit',
+        points:    0,
+        is_banned: false,
       }, { onConflict: 'id', ignoreDuplicates: true })
       return supabaseResponse
     }
 
-    if (!member || !appStatus || appStatus === 'rejected') {
-      return NextResponse.redirect(new URL('/apply', request.url))
+    // Zaakceptowany z rekordem → wchodzi normalnie
+    if (appStatus === 'accepted' && member) {
+      return supabaseResponse
     }
 
+    // Oczekuje na akceptację → /pending
     if (appStatus === 'pending') {
       return NextResponse.redirect(new URL('/pending', request.url))
     }
 
-    return supabaseResponse
+    // Brak podania, odrzucony lub brak member → /apply
+    return NextResponse.redirect(new URL('/apply', request.url))
   }
 
   return supabaseResponse
