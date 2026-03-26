@@ -14,15 +14,13 @@ const supabase = createClient(
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>()
 
 function checkRateLimit(memberId: string): boolean {
-  const now    = Date.now()
-  const window = 10_000
-  const limit  = 20
-  const entry  = rateLimitMap.get(memberId)
+  const now   = Date.now()
+  const entry = rateLimitMap.get(memberId)
   if (!entry || now > entry.resetAt) {
-    rateLimitMap.set(memberId, { count: 1, resetAt: now + window })
+    rateLimitMap.set(memberId, { count: 1, resetAt: now + 10_000 })
     return true
   }
-  if (entry.count >= limit) return false
+  if (entry.count >= 20) return false
   entry.count++
   return true
 }
@@ -78,8 +76,6 @@ const BridgePayloadSchema = z.object({
   telemetry:     TelemetryExtSchema,
 })
 
-type BridgePayload = z.infer<typeof BridgePayloadSchema>
-
 // ─── Helpers ──────────────────────────────────────────────
 async function resolveMember(apiKey: string) {
   const { data, error } = await supabase
@@ -134,21 +130,15 @@ async function upsertTelemetry(
         income:                tel?.income                ?? null,
         job_max_distance:      tel?.job_max_distance      ?? null,
         distance_remaining_km: tel?.distance_remaining_km ?? null,
-        eta_minutes:           tel?.eta_minutes != null
-          ? Math.round(tel.eta_minutes)
-          : null,
+        eta_minutes:           tel?.eta_minutes != null   ? Math.round(tel.eta_minutes)  : null,
         truck_brand:           tel?.truck_brand           ?? null,
         truck_model:           tel?.truck_model           ?? null,
         speed_kmh:             position.speed,
         fuel_liters:           tel?.fuel_liters           ?? null,
         fuel_capacity:         tel?.fuel_capacity         ?? null,
         odometer:              tel?.odometer              ?? null,
-        rpm:                   tel?.rpm != null
-          ? Math.round(tel.rpm)
-          : null,
-        gear:                  tel?.gear != null
-          ? Math.round(tel.gear)
-          : null,
+        rpm:                   tel?.rpm  != null          ? Math.round(tel.rpm)          : null,
+        gear:                  tel?.gear != null          ? Math.round(tel.gear)         : null,
         game_time:             position.game_time         ?? null,
         updated_at:            now,
       },
@@ -157,10 +147,9 @@ async function upsertTelemetry(
 }
 
 // ─── handleJobStarted ─────────────────────────────────────
-// FIX: anuluj tylko joby starsze niż 30s — nie nadpisuje świeżo dostarczonego
 async function handleJobStarted(memberId: string, job: z.infer<typeof JobSchema>) {
+  // Anuluj tylko stare joby (>30s) — nie nadpisuje świeżo dostarczonego
   const thirtySecAgo = new Date(Date.now() - 30_000).toISOString()
-
   await supabase
     .from('jobs')
     .update({ status: 'cancelled' })
@@ -186,9 +175,35 @@ async function handleJobStarted(memberId: string, job: z.infer<typeof JobSchema>
 }
 
 // ─── handleJobDelivered ───────────────────────────────────
-// FIX: szuka też jobów 'cancelled' (race condition) i nadpisuje na 'completed'
 async function handleJobDelivered(memberId: string, job: z.infer<typeof JobSchema>) {
   const now = new Date().toISOString()
+
+  // Pobierz telemetrię jako fallback dla dystansu i income
+  const { data: telRow } = await supabase
+    .from('member_telemetry')
+    .select('job_max_distance, income, cargo')
+    .eq('member_id', memberId)
+    .maybeSingle()
+
+  // FIX: fallback na job_max_distance z telemetrii gdy Bridge wysłał null/0
+  const finalDistanceKm = (job.distance_km && job.distance_km > 5)
+    ? job.distance_km
+    : (telRow?.job_max_distance ?? 0)
+
+  const finalIncome = (job.income && job.income > 0)
+    ? job.income
+    : (telRow?.income ?? 0)
+
+  // Zabezpieczenie — nie zapisuj joba z dystansem < 5km
+  if (finalDistanceKm < 5) {
+    console.warn(`[Bridge] handleJobDelivered: dystans ${finalDistanceKm}km < 5 — pomijam`)
+    const { calculateJobPay } = await import('@/lib/vtc/payCalculator')
+    return calculateJobPay({
+      distance_km: 0, cargo_units: 1, fuel_used_liters: null,
+      damage_percent: 0, cargo_type: null, had_fine: false,
+      fine_amount: 0, fuel_price: 2.8,
+    })
+  }
 
   const { data: fuelRow } = await supabase
     .from('fuel_prices').select('price')
@@ -199,7 +214,7 @@ async function handleJobDelivered(memberId: string, job: z.infer<typeof JobSchem
 
   const { calculateJobPay } = await import('@/lib/vtc/payCalculator')
   const pay = calculateJobPay({
-    distance_km:      job.distance_km    ?? 0,
+    distance_km:      finalDistanceKm,
     cargo_units:      1,
     fuel_used_liters: job.fuel_used      ?? null,
     damage_percent:   job.damage_percent ?? 0,
@@ -209,9 +224,8 @@ async function handleJobDelivered(memberId: string, job: z.infer<typeof JobSchem
     fuel_price:       fuelPrice,
   })
 
-  // FIX: szukaj 'taken' LUB 'cancelled' z ostatnich 60s (race condition fix)
+  // Szukaj aktywnego joba — też 'cancelled' z ostatnich 60s (race condition fix)
   const sixtySecAgo = new Date(Date.now() - 60_000).toISOString()
-
   const { data: activeJob } = await supabase
     .from('jobs')
     .select('id')
@@ -224,14 +238,14 @@ async function handleJobDelivered(memberId: string, job: z.infer<typeof JobSchem
     .single()
 
   const jobData = {
-    cargo:            job.cargo            ?? null,
+    cargo:            job.cargo            ?? telRow?.cargo ?? null,
     origin_city:      job.origin_city      ?? null,
     destination_city: job.destination_city ?? null,
-    distance_km:      job.distance_km      ?? null,
+    distance_km:      finalDistanceKm,
     income:           pay.driver_share,
     fuel_used:        job.fuel_used        ?? null,
     damage_percent:   job.damage_percent   ?? null,
-    status:           'completed',          // zawsze completed — nigdy cancelled
+    status:           'completed',
     completed_at:     now,
   }
 
@@ -257,8 +271,9 @@ async function handleJobDelivered(memberId: string, job: z.infer<typeof JobSchem
     p_metadata: {
       gross:          pay.gross,
       breakdown:      pay.breakdown,
-      distance_km:    job.distance_km,
+      distance_km:    finalDistanceKm,
       damage_percent: job.damage_percent,
+      game_income:    finalIncome,
     },
   })
 
@@ -269,7 +284,7 @@ async function handleJobDelivered(memberId: string, job: z.infer<typeof JobSchem
     p_description: `Podatek firmowy — Job ${finalJobId?.slice(0, 8) ?? '?'}`,
   })
 
-  const bonusPoints = Math.floor((job.distance_km ?? 0) / 100)
+  const bonusPoints = Math.floor(finalDistanceKm / 100)
   if (bonusPoints > 0) {
     await supabase.rpc('increment_member_points', {
       p_member_id: memberId, p_points: bonusPoints,
@@ -280,10 +295,9 @@ async function handleJobDelivered(memberId: string, job: z.infer<typeof JobSchem
 }
 
 // ─── handleJobCancelled ───────────────────────────────────
-// FIX: anuluj tylko joby starsze niż 60s — chroni świeżo dostarczone
 async function handleJobCancelled(memberId: string) {
+  // Anuluj tylko joby starsze niż 60s — chroni świeżo dostarczone
   const sixtySecAgo = new Date(Date.now() - 60_000).toISOString()
-
   await supabase
     .from('jobs')
     .update({ status: 'cancelled' })
@@ -310,20 +324,18 @@ export async function POST(req: NextRequest) {
   const payload = parsed.data
 
   const member = await resolveMember(payload.api_key)
-  if (!member) return NextResponse.json({ ok: false, error: 'Invalid api_key' }, { status: 401 })
-  if (member.is_banned) return NextResponse.json({ ok: false, error: 'Account is banned' }, { status: 403 })
+  if (!member)        return NextResponse.json({ ok: false, error: 'Invalid api_key' },             { status: 401 })
+  if (member.is_banned) return NextResponse.json({ ok: false, error: 'Account is banned' },         { status: 403 })
   if (!checkRateLimit(member.id)) return NextResponse.json(
     { ok: false, error: 'Rate limit exceeded. Max 20 req / 10s' }, { status: 429 }
   )
 
-  // Upsert pozycji (mapa)
   const { error: posError } = await upsertPosition(member.id, payload.position)
   if (posError) {
     console.error('[Bridge] upsertPosition error:', posError)
     return NextResponse.json({ ok: false, error: 'DB error (position)' }, { status: 500 })
   }
 
-  // Upsert telemetrii (dashboard)
   const { error: telError } = await upsertTelemetry(member.id, payload.position, payload.telemetry)
   if (telError) console.error('[Bridge] upsertTelemetry error:', telError.message, telError.details)
 
