@@ -1,2 +1,7 @@
+# Bridge - pliki binarne i zależności
 node_modules/
 dist/
+build/
+*.exe
+*.blockmap
+*.asar
