@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+  <title>GLos Logistics Bridge</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- Titlebar -->
+  <div class="titlebar">
+    <div class="titlebar-left">
+      <div class="titlebar-logo">🚛</div>
+      <span class="titlebar-title">GLos Logistics Bridge</span>
+      <span class="titlebar-version">v6.0</span>
+    </div>
+    <div class="titlebar-controls">
+      <button class="btn-titlebar" id="btn-minimize" title="Minimalizuj">─</button>
+      <button class="btn-titlebar" id="btn-hide"     title="Do tray">⊡</button>
+      <button class="btn-titlebar btn-close" id="btn-close" title="Zamknij">✕</button>
+    </div>
+  </div>
+
+  <!-- Główna zawartość -->
+  <div class="app" id="app">
+
+    <!-- ── EKRAN: Setup ── -->
+    <div class="screen" id="screen-setup">
+      <div class="setup-logo">
+        <div class="logo-icon">🚛</div>
+        <h1>GLos Logistics Bridge</h1>
+        <p class="subtitle">Telemetria • Zlecenia • Statystyki</p>
+      </div>
+
+      <div class="card">
+        <div class="card-title">⚙️ Konfiguracja konta</div>
+
+        <div class="field">
+          <label>Adres serwera VTC</label>
+          <input id="input-server" type="text"
+            placeholder="https://gloslogistics.pl"
+            value="https://glos-logistics.vercel.app" />
+        </div>
+
+        <div class="field">
+          <label>Klucz API Bridge</label>
+          <div class="input-row">
+            <input id="input-apikey" type="password"
+              placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
+            <button class="btn-icon" id="btn-toggle-key" title="Pokaż/ukryj">👁</button>
+          </div>
+          <p class="field-hint">
+            Znajdziesz go w:
+            <a href="#" id="link-panel">Panel VTC → Profil → API Bridge</a>
+          </p>
+        </div>
+
+        <button class="btn-primary" id="btn-verify">
+          <span id="verify-text">🔐 Zweryfikuj i zapisz</span>
+          <span id="verify-spinner" class="spinner hidden"></span>
+        </button>
+
+        <div id="verify-result" class="result hidden"></div>
+      </div>
+    </div>
+
+    <!-- ── EKRAN: Dashboard ── -->
+    <div class="screen hidden" id="screen-dashboard">
+
+      <!-- Profil -->
+      <div class="profile-bar">
+        <div class="profile-info">
+          <div class="profile-avatar">🚛</div>
+          <div>
+            <div class="profile-name" id="profile-name">—</div>
+            <div class="profile-rank" id="profile-rank">—</div>
+          </div>
+        </div>
+        <button class="btn-ghost btn-sm" id="btn-reset">↩ Reset</button>
+      </div>
+
+      <!-- Status Bridge -->
+      <div class="status-card" id="status-card">
+        <div class="status-indicator" id="status-dot"></div>
+        <div class="status-text">
+          <div class="status-label" id="status-label">Zatrzymany</div>
+          <div class="status-sub"   id="status-sub">Kliknij Start aby uruchomić</div>
+        </div>
+        <button class="btn-start" id="btn-toggle">▶ Start</button>
+      </div>
+
+      <!-- Telemetria -->
+      <div class="tele-grid" id="tele-grid">
+        <div class="tele-card">
+          <div class="tele-icon">⚡</div>
+          <div class="tele-value" id="t-speed">—</div>
+          <div class="tele-label">km/h</div>
+        </div>
+        <div class="tele-card">
+          <div class="tele-icon">⛽</div>
+          <div class="tele-value" id="t-fuel">—</div>
+          <div class="tele-label">Paliwo</div>
+        </div>
+        <div class="tele-card">
+          <div class="tele-icon">🔧</div>
+          <div class="tele-value" id="t-damage">—</div>
+          <div class="tele-label">Uszkodz.</div>
+        </div>
+        <div class="tele-card">
+          <div class="tele-icon">📦</div>
+          <div class="tele-value" id="t-jobs">0</div>
+          <div class="tele-label">Sesja</div>
+        </div>
+      </div>
+
+      <!-- Aktualne zlecenie -->
+      <div class="card job-card" id="job-card">
+        <div class="card-title">📦 Aktualne zlecenie</div>
+        <div id="job-none" class="job-empty">Brak aktywnego zlecenia</div>
+        <div id="job-info" class="hidden">
+          <div class="job-route">
+            <span id="job-from">—</span>
+            <span class="job-arrow">→</span>
+            <span id="job-to">—</span>
+          </div>
+          <div class="job-meta">
+            <span id="job-cargo">—</span>
+            <span id="job-income">—</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Log -->
+      <div class="card log-card">
+        <div class="card-title">📋 Log aktywności</div>
+        <div class="log-list" id="log-list"></div>
+      </div>
+
+      <!-- Stats sesji -->
+      <div class="session-stats">
+        <div class="stat-pill">
+          <span class="stat-label">Wysłano</span>
+          <span class="stat-val" id="s-sent">0</span>
+        </div>
+        <div class="stat-pill">
+          <span class="stat-label">Dostarczone</span>
+          <span class="stat-val" id="s-delivered">0</span>
+        </div>
+        <div class="stat-pill">
+          <span class="stat-label">Błędy</span>
+          <span class="stat-val" id="s-errors">0</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

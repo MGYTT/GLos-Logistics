@@ -1,0 +1,58 @@
+{
+  "name": "vtc-bridge",
+  "version": "6.0.0",
+  "description": "GLos Logistics VTC Bridge",
+  "author": "GLos Logistics <contact@gloslogistics.pl>",
+  "main": "main.js",
+  "scripts": {
+  "start":          "electron .",
+  "build:portable": "node build.js"
+},
+  "build": {
+    "appId": "pl.gloslogistics.bridge",
+    "productName": "GLos Logistics Bridge",
+    "copyright": "© 2026 GLos Logistics",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signingHashAlgorithms": null,
+      "sign": null,
+      "certificateFile": null,
+      "certificatePassword": null,
+      "verifyUpdateCodeSignature": false
+    },
+    "portable": {
+      "artifactName": "GLos-Logistics-Bridge-v${version}-portable.exe",
+      "requestExecutionLevel": "user"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "src/**/*",
+      "assets/**/*",
+      "!**/*.map",
+      "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
+      "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}",
+      "!**/node_modules/.bin"
+    ],
+    "asar": true,
+    "compression": "maximum"
+  },
+  "devDependencies": {
+    "electron": "^29.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "dependencies": {
+    "electron-store": "^8.1.0"
+  }
+}

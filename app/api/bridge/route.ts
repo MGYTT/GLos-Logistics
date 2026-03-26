@@ -48,9 +48,6 @@ const JobSchema = z.object({
   truckershub_job_id: z.string().max(64).nullable().optional(),
 })
 
-// ─── Rozszerzony payload z pełną telemetrią ───────────────
-// Bridge wysyła teraz dodatkowe pole `telemetry` z surowymi
-// danymi Funbit potrzebnymi przez TelemetryBanner
 const TelemetryExtSchema = z.object({
   has_job:               z.boolean().optional(),
   from_city:             z.string().max(80).nullable().optional(),
@@ -78,7 +75,6 @@ const BridgePayloadSchema = z.object({
   active_job:    JobSchema.nullable().optional(),
   event:         z.enum(['job_started', 'job_delivered', 'job_cancelled', 'none']).default('none'),
   delivered_job: JobSchema.nullable().optional(),
-  // Nowe pole — pełna telemetria dla dashboardu
   telemetry:     TelemetryExtSchema,
 })
 
@@ -116,7 +112,6 @@ async function upsertPosition(
     )
 }
 
-// ─── NOWA funkcja: upsert telemetrii dla dashboardu ───────
 async function upsertTelemetry(
   memberId: string,
   position: z.infer<typeof PositionSchema>,
@@ -139,7 +134,6 @@ async function upsertTelemetry(
         income:                tel?.income                ?? null,
         job_max_distance:      tel?.job_max_distance      ?? null,
         distance_remaining_km: tel?.distance_remaining_km ?? null,
-        // ← Math.round() żeby nigdy nie wysłać 667.9 do integer/numeric
         eta_minutes:           tel?.eta_minutes != null
           ? Math.round(tel.eta_minutes)
           : null,
@@ -162,10 +156,17 @@ async function upsertTelemetry(
     )
 }
 
+// ─── handleJobStarted ─────────────────────────────────────
+// FIX: anuluj tylko joby starsze niż 30s — nie nadpisuje świeżo dostarczonego
 async function handleJobStarted(memberId: string, job: z.infer<typeof JobSchema>) {
+  const thirtySecAgo = new Date(Date.now() - 30_000).toISOString()
+
   await supabase
-    .from('jobs').update({ status: 'cancelled' })
-    .eq('member_id', memberId).eq('status', 'taken')
+    .from('jobs')
+    .update({ status: 'cancelled' })
+    .eq('member_id', memberId)
+    .eq('status', 'taken')
+    .lt('created_at', thirtySecAgo)
 
   return supabase.from('jobs').insert({
     member_id:          memberId,
@@ -184,6 +185,8 @@ async function handleJobStarted(memberId: string, job: z.infer<typeof JobSchema>
   })
 }
 
+// ─── handleJobDelivered ───────────────────────────────────
+// FIX: szuka też jobów 'cancelled' (race condition) i nadpisuje na 'completed'
 async function handleJobDelivered(memberId: string, job: z.infer<typeof JobSchema>) {
   const now = new Date().toISOString()
 
@@ -206,10 +209,19 @@ async function handleJobDelivered(memberId: string, job: z.infer<typeof JobSchem
     fuel_price:       fuelPrice,
   })
 
+  // FIX: szukaj 'taken' LUB 'cancelled' z ostatnich 60s (race condition fix)
+  const sixtySecAgo = new Date(Date.now() - 60_000).toISOString()
+
   const { data: activeJob } = await supabase
-    .from('jobs').select('id')
-    .eq('member_id', memberId).eq('status', 'taken')
-    .order('created_at', { ascending: false }).limit(1).single()
+    .from('jobs')
+    .select('id')
+    .eq('member_id', memberId)
+    .in('status', ['taken', 'cancelled'])
+    .eq('source', 'bridge')
+    .gte('created_at', sixtySecAgo)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single()
 
   const jobData = {
     cargo:            job.cargo            ?? null,
@@ -219,7 +231,7 @@ async function handleJobDelivered(memberId: string, job: z.infer<typeof JobSchem
     income:           pay.driver_share,
     fuel_used:        job.fuel_used        ?? null,
     damage_percent:   job.damage_percent   ?? null,
-    status:           'completed',
+    status:           'completed',          // zawsze completed — nigdy cancelled
     completed_at:     now,
   }
 
@@ -267,9 +279,17 @@ async function handleJobDelivered(memberId: string, job: z.infer<typeof JobSchem
   return pay
 }
 
+// ─── handleJobCancelled ───────────────────────────────────
+// FIX: anuluj tylko joby starsze niż 60s — chroni świeżo dostarczone
 async function handleJobCancelled(memberId: string) {
-  await supabase.from('jobs').update({ status: 'cancelled' })
-    .eq('member_id', memberId).eq('status', 'taken')
+  const sixtySecAgo = new Date(Date.now() - 60_000).toISOString()
+
+  await supabase
+    .from('jobs')
+    .update({ status: 'cancelled' })
+    .eq('member_id', memberId)
+    .eq('status', 'taken')
+    .lt('created_at', sixtySecAgo)
 }
 
 // ─── POST /api/bridge ─────────────────────────────────────
@@ -303,9 +323,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'DB error (position)' }, { status: 500 })
   }
 
-  // Upsert telemetrii (dashboard) — równolegle, nie blokujemy
+  // Upsert telemetrii (dashboard)
   const { error: telError } = await upsertTelemetry(member.id, payload.position, payload.telemetry)
-if (telError) console.error('[Bridge] upsertTelemetry error:', telError.message, telError.details)
+  if (telError) console.error('[Bridge] upsertTelemetry error:', telError.message, telError.details)
 
   switch (payload.event) {
     case 'job_started':
