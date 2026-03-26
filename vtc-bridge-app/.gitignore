@@ -1,7 +1,6 @@
-# Bridge - pliki binarne i zależności
+# Electron build artifacts
+/dist/
 node_modules/
-dist/
-build/
 *.exe
 *.blockmap
 *.asar
