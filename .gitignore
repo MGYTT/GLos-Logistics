@@ -40,3 +40,5 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 vtc-config.json
+vtc-bridge-app/node_modules/
+vtc-bridge-app/dist/
