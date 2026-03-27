@@ -5,9 +5,10 @@
   "author": "GLos Logistics <contact@gloslogistics.pl>",
   "main": "main.js",
   "scripts": {
-  "start":          "electron .",
-  "build:portable": "node build.js"
-},
+    "start": "electron .",
+    "build:portable": "node build.js",
+    "build": "electron-builder"
+  },
   "build": {
     "appId": "pl.gloslogistics.bridge",
     "productName": "GLos Logistics Bridge",
@@ -18,10 +19,12 @@
     "win": {
       "target": [
         {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
           "target": "portable",
-          "arch": [
-            "x64"
-          ]
+          "arch": ["x64"]
         }
       ],
       "signingHashAlgorithms": null,
@@ -30,6 +33,13 @@
       "certificatePassword": null,
       "verifyUpdateCodeSignature": false
     },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "GLos-Logistics-Bridge-Setup-v${version}.exe"
+    },
     "portable": {
       "artifactName": "GLos-Logistics-Bridge-v${version}-portable.exe",
       "requestExecutionLevel": "user"
@@ -37,6 +47,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "ffmpeg.dll",
       "renderer/**/*",
       "src/**/*",
       "assets/**/*",
@@ -46,6 +57,10 @@
       "!**/node_modules/.bin"
     ],
     "asar": true,
+    "asarUnpack": [
+      "**/*.dll",
+      "**/*.node"
+    ],
     "compression": "maximum"
   },
   "devDependencies": {
