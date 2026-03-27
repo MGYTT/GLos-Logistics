@@ -2,7 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { BridgeDownload } from '@/components/bridge/BridgeDownload'
 
-export const metadata = { title: 'ETS2 Bridge' }
+export const metadata = { title: 'GLos Logistics Bridge' }
 
 export default async function BridgePage() {
   const supabase = await createClient()
