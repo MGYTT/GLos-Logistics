@@ -15,7 +15,7 @@ const BRIDGE_DOWNLOAD_URL =
   'https://github.com/MGYTT/GLos-Logistics/releases/download/Glos/GLos-Logistics-Bridge-Setup-v6.0.0.exe'
 
 const FUNBIT_DOWNLOAD_URL =
-  'https://github.com/Funbit/ets2-telemetry-server/releases/latest'
+  'https://github.com/Funbit/ets2-telemetry-server.git'
 
 interface Props {
   member: { id: string; username: string; api_key: string }
