@@ -27,6 +27,7 @@
     "@tsparticles/react": "^3.0.0",
     "@tsparticles/slim": "^3.9.1",
     "@types/leaflet": "^1.9.21",
+    "@vercel/speed-insights": "^2.0.0",
     "@visx/drag": "^3.12.0",
     "@visx/zoom": "^3.12.0",
     "class-variance-authority": "^0.7.1",
