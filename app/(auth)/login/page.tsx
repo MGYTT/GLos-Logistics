@@ -288,38 +288,6 @@ export default function LoginPage() {
             </motion.div>
           </Link>
         </motion.div>
-
-        {/* ── Rekrutacja ────────────────────────── */}
-        <motion.div variants={fadeUp} className="mt-3">
-          <Link href="/recruitment" className="block group">
-            <motion.div
-              whileHover={{ scale: 1.01 }}
-              whileTap={{ scale: 0.99 }}
-              className="bg-zinc-900/40 border border-zinc-800 group-hover:border-amber-500/30
-                         rounded-xl px-4 py-3 flex items-center justify-between gap-3
-                         transition-colors duration-200"
-            >
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-amber-500/10 flex items-center
-                                justify-center shrink-0 group-hover:bg-amber-500/20
-                                transition-colors">
-                  <Truck className="w-4 h-4 text-amber-400" />
-                </div>
-                <div>
-                  <p className="text-xs font-semibold text-zinc-300">
-                    Złóż podanie rekrutacyjne
-                  </p>
-                  <p className="text-[11px] text-zinc-600 mt-0.5">
-                    Dołącz do naszej ekipy kierowców
-                  </p>
-                </div>
-              </div>
-              <ChevronRight className="w-4 h-4 text-zinc-700 group-hover:text-amber-400
-                                       group-hover:translate-x-0.5 transition-all" />
-            </motion.div>
-          </Link>
-        </motion.div>
-
         {/* Powrót */}
         <motion.div variants={fadeUp} className="text-center mt-4">
           <Link
