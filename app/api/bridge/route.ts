@@ -3,7 +3,6 @@ import { createClient }              from '@supabase/supabase-js'
 import { z }                         from 'zod'
 import { sendJobDeliveredWebhook }   from '@/lib/discord/webhooks'
 
-// ─── Admin client ─────────────────────────────────────────
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!,
@@ -87,10 +86,7 @@ async function resolveMember(apiKey: string) {
   return data
 }
 
-async function upsertPosition(
-  memberId: string,
-  position: z.infer<typeof PositionSchema>,
-) {
+async function upsertPosition(memberId: string, position: z.infer<typeof PositionSchema>) {
   return supabase
     .from('driver_positions')
     .upsert(
@@ -146,7 +142,6 @@ async function upsertTelemetry(
     )
 }
 
-// ─── Helper: buduj title i wypełnij obie pary kolumn miast ─
 function buildJobCityFields(originCity?: string | null, destinationCity?: string | null) {
   const from  = originCity      ?? null
   const to    = destinationCity ?? null
@@ -168,7 +163,6 @@ async function handleJobStarted(memberId: string, job: z.infer<typeof JobSchema>
 
   return supabase.from('jobs').insert({
     member_id:          memberId,
-    // FIX: wypełnij from_city, to_city, title — żeby UI je pokazywało
     ...cities,
     cargo:              job.cargo              ?? null,
     cargo_weight:       0,
@@ -193,32 +187,23 @@ async function handleJobStarted(memberId: string, job: z.infer<typeof JobSchema>
 async function handleJobDelivered(memberId: string, job: z.infer<typeof JobSchema>) {
   const now = new Date().toISOString()
 
-  // Pobierz telemetrię jako fallback dla dystansu i income
   const { data: telRow } = await supabase
     .from('member_telemetry')
     .select('job_max_distance, income, cargo, from_city, to_city')
     .eq('member_id', memberId)
     .maybeSingle()
 
-  // FIX: fallback na job_max_distance z telemetrii gdy Bridge wysłał null/0
-  const finalDistanceKm = (job.distance_km && job.distance_km > 5)
-    ? job.distance_km
-    : (telRow?.job_max_distance ?? 0)
+  // Nigdy nie blokuj — zapisz z dystansem 0 gdy brak danych
+  const finalDistanceKm =
+    (job.distance_km    && job.distance_km    > 0) ? job.distance_km    :
+    (telRow?.job_max_distance && telRow.job_max_distance > 0) ? telRow.job_max_distance :
+    0
 
-  const finalIncome = (job.income && job.income > 0)
-    ? job.income
-    : (telRow?.income ?? 0)
+  const finalIncome =
+    (job.income && job.income > 0) ? job.income :
+    (telRow?.income ?? 0)
 
-  // Zabezpieczenie — nie zapisuj joba z dystansem < 5km
-  if (finalDistanceKm < 5) {
-    console.warn(`[Bridge] handleJobDelivered: dystans ${finalDistanceKm}km < 5 — pomijam`)
-    const { calculateJobPay } = await import('@/lib/vtc/payCalculator')
-    return calculateJobPay({
-      distance_km: 0, cargo_units: 1, fuel_used_liters: null,
-      damage_percent: 0, cargo_type: null, had_fine: false,
-      fine_amount: 0, fuel_price: 2.8,
-    })
-  }
+  console.log(`[Bridge] handleJobDelivered: dist=${finalDistanceKm}km income=${finalIncome} member=${memberId}`)
 
   const { data: fuelRow } = await supabase
     .from('fuel_prices').select('price')
@@ -239,35 +224,34 @@ async function handleJobDelivered(memberId: string, job: z.infer<typeof JobSchem
     fuel_price:       fuelPrice,
   })
 
-  // FIX: wypełnij obie pary kolumn miast — fallback na telemetrię
   const originCity      = job.origin_city      ?? telRow?.from_city ?? null
   const destinationCity = job.destination_city ?? telRow?.to_city   ?? null
   const cities          = buildJobCityFields(originCity, destinationCity)
 
   const jobData = {
     ...cities,
-    cargo:         job.cargo        ?? telRow?.cargo ?? null,
-    cargo_weight:  0,
-    trailer_type:  'unknown',
-    distance_km:   finalDistanceKm,
-    income:        pay.driver_share,
-    pay:           pay.driver_share,
-    fuel_used:     job.fuel_used      ?? null,
+    cargo:          job.cargo         ?? telRow?.cargo ?? null,
+    cargo_weight:   0,
+    trailer_type:   'unknown',
+    distance_km:    finalDistanceKm,
+    income:         pay.driver_share,
+    pay:            pay.driver_share,
+    fuel_used:      job.fuel_used      ?? null,
     damage_percent: job.damage_percent ?? null,
-    priority:      'normal',
-    status:        'completed',
-    completed_at:  now,
+    priority:       'normal',
+    status:         'completed',
+    completed_at:   now,
   }
 
-  // Szukaj istniejącego joba (taken lub cancelled z ostatnich 60s)
-  const sixtySecAgo = new Date(Date.now() - 60_000).toISOString()
+  // FIX: rozszerzone okno do 3 minut — obsługuje grace period + opóźnienia sieciowe
+  const threeMinAgo = new Date(Date.now() - 180_000).toISOString()
   const { data: activeJob } = await supabase
     .from('jobs')
     .select('id')
     .eq('member_id', memberId)
     .in('status', ['taken', 'cancelled'])
     .eq('source', 'bridge')
-    .gte('created_at', sixtySecAgo)
+    .gte('created_at', threeMinAgo)
     .order('created_at', { ascending: false })
     .limit(1)
     .single()
@@ -275,24 +259,32 @@ async function handleJobDelivered(memberId: string, job: z.infer<typeof JobSchem
   let finalJobId: string | undefined
 
   if (activeJob) {
-    await supabase.from('jobs').update(jobData).eq('id', activeJob.id)
+    const { error: updateErr } = await supabase
+      .from('jobs').update(jobData).eq('id', activeJob.id)
+    if (updateErr) console.error('[Bridge] update job error:', updateErr)
+    else console.log(`[Bridge] job updated: ${activeJob.id} → completed`)
     finalJobId = activeJob.id
   } else {
-    const { data: inserted } = await supabase
+    // Brak aktywnego joba — wstaw nowy completed
+    const { data: inserted, error: insertErr } = await supabase
       .from('jobs')
       .insert({
-        member_id:   memberId,
-        source:      'bridge',
-        server:      'EU1',
-        notes:       null,
-        created_at:  now,
+        member_id:  memberId,
+        source:     'bridge',
+        server:     'EU1',
+        notes:      null,
+        created_at: now,
         ...jobData,
       })
       .select('id').single()
+    if (insertErr) console.error('[Bridge] insert job error:', insertErr)
+    else console.log(`[Bridge] job inserted: ${inserted?.id} → completed`)
     finalJobId = inserted?.id
   }
 
-  await supabase.rpc('credit_wallet', {
+  console.log(`[Bridge] job saved: ${finalJobId} | dist: ${finalDistanceKm}km | pay: ${pay.driver_share}`)
+
+  const { error: walletErr } = await supabase.rpc('credit_wallet', {
     p_member_id:   memberId,
     p_amount:      pay.driver_share,
     p_type:        'job_pay',
@@ -306,19 +298,22 @@ async function handleJobDelivered(memberId: string, job: z.infer<typeof JobSchem
       game_income:    finalIncome,
     },
   })
+  if (walletErr) console.error('[Bridge] credit_wallet error:', walletErr)
 
-  await supabase.rpc('credit_company', {
+  const { error: companyErr } = await supabase.rpc('credit_company', {
     p_amount:      pay.company_share,
     p_type:        'company_tax',
     p_member_id:   memberId,
     p_description: `Podatek firmowy — Job ${finalJobId?.slice(0, 8) ?? '?'}`,
   })
+  if (companyErr) console.error('[Bridge] credit_company error:', companyErr)
 
   const bonusPoints = Math.floor(finalDistanceKm / 100)
   if (bonusPoints > 0) {
-    await supabase.rpc('increment_member_points', {
+    const { error: pointsErr } = await supabase.rpc('increment_member_points', {
       p_member_id: memberId, p_points: bonusPoints,
     })
+    if (pointsErr) console.error('[Bridge] increment_member_points error:', pointsErr)
   }
 
   return pay
@@ -353,8 +348,8 @@ export async function POST(req: NextRequest) {
   const payload = parsed.data
 
   const member = await resolveMember(payload.api_key)
-  if (!member)          return NextResponse.json({ ok: false, error: 'Invalid api_key' },              { status: 401 })
-  if (member.is_banned) return NextResponse.json({ ok: false, error: 'Account is banned' },            { status: 403 })
+  if (!member)          return NextResponse.json({ ok: false, error: 'Invalid api_key' },   { status: 401 })
+  if (member.is_banned) return NextResponse.json({ ok: false, error: 'Account is banned' }, { status: 403 })
   if (!checkRateLimit(member.id)) return NextResponse.json(
     { ok: false, error: 'Rate limit exceeded. Max 20 req / 10s' }, { status: 429 }
   )
