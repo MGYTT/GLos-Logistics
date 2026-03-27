@@ -130,15 +130,15 @@ async function upsertTelemetry(
         income:                tel?.income                ?? null,
         job_max_distance:      tel?.job_max_distance      ?? null,
         distance_remaining_km: tel?.distance_remaining_km ?? null,
-        eta_minutes:           tel?.eta_minutes != null   ? Math.round(tel.eta_minutes)  : null,
+        eta_minutes:           tel?.eta_minutes != null   ? Math.round(tel.eta_minutes) : null,
         truck_brand:           tel?.truck_brand           ?? null,
         truck_model:           tel?.truck_model           ?? null,
         speed_kmh:             position.speed,
         fuel_liters:           tel?.fuel_liters           ?? null,
         fuel_capacity:         tel?.fuel_capacity         ?? null,
         odometer:              tel?.odometer              ?? null,
-        rpm:                   tel?.rpm  != null          ? Math.round(tel.rpm)          : null,
-        gear:                  tel?.gear != null          ? Math.round(tel.gear)         : null,
+        rpm:                   tel?.rpm  != null          ? Math.round(tel.rpm)         : null,
+        gear:                  tel?.gear != null          ? Math.round(tel.gear)        : null,
         game_time:             position.game_time         ?? null,
         updated_at:            now,
       },
@@ -146,9 +146,16 @@ async function upsertTelemetry(
     )
 }
 
+// ─── Helper: buduj title i wypełnij obie pary kolumn miast ─
+function buildJobCityFields(originCity?: string | null, destinationCity?: string | null) {
+  const from  = originCity      ?? null
+  const to    = destinationCity ?? null
+  const title = from && to ? `${from} → ${to}` : (from ?? to ?? 'Zlecenie Bridge')
+  return { from_city: from, to_city: to, origin_city: from, destination_city: to, title }
+}
+
 // ─── handleJobStarted ─────────────────────────────────────
 async function handleJobStarted(memberId: string, job: z.infer<typeof JobSchema>) {
-  // Anuluj tylko stare joby (>30s) — nie nadpisuje świeżo dostarczonego
   const thirtySecAgo = new Date(Date.now() - 30_000).toISOString()
   await supabase
     .from('jobs')
@@ -157,18 +164,26 @@ async function handleJobStarted(memberId: string, job: z.infer<typeof JobSchema>
     .eq('status', 'taken')
     .lt('created_at', thirtySecAgo)
 
+  const cities = buildJobCityFields(job.origin_city, job.destination_city)
+
   return supabase.from('jobs').insert({
     member_id:          memberId,
+    // FIX: wypełnij from_city, to_city, title — żeby UI je pokazywało
+    ...cities,
     cargo:              job.cargo              ?? null,
-    origin_city:        job.origin_city        ?? null,
-    destination_city:   job.destination_city   ?? null,
+    cargo_weight:       0,
+    trailer_type:       'unknown',
     distance_km:        job.distance_km        ?? null,
     income:             job.income             ?? null,
+    pay:                job.income             ?? null,
     fuel_used:          null,
     damage_percent:     0,
     truckershub_job_id: job.truckershub_job_id ?? null,
+    priority:           'normal',
     status:             'taken',
     source:             'bridge',
+    server:             'EU1',
+    notes:              null,
     completed_at:       null,
     created_at:         new Date().toISOString(),
   })
@@ -181,7 +196,7 @@ async function handleJobDelivered(memberId: string, job: z.infer<typeof JobSchem
   // Pobierz telemetrię jako fallback dla dystansu i income
   const { data: telRow } = await supabase
     .from('member_telemetry')
-    .select('job_max_distance, income, cargo')
+    .select('job_max_distance, income, cargo, from_city, to_city')
     .eq('member_id', memberId)
     .maybeSingle()
 
@@ -224,7 +239,27 @@ async function handleJobDelivered(memberId: string, job: z.infer<typeof JobSchem
     fuel_price:       fuelPrice,
   })
 
-  // Szukaj aktywnego joba — też 'cancelled' z ostatnich 60s (race condition fix)
+  // FIX: wypełnij obie pary kolumn miast — fallback na telemetrię
+  const originCity      = job.origin_city      ?? telRow?.from_city ?? null
+  const destinationCity = job.destination_city ?? telRow?.to_city   ?? null
+  const cities          = buildJobCityFields(originCity, destinationCity)
+
+  const jobData = {
+    ...cities,
+    cargo:         job.cargo        ?? telRow?.cargo ?? null,
+    cargo_weight:  0,
+    trailer_type:  'unknown',
+    distance_km:   finalDistanceKm,
+    income:        pay.driver_share,
+    pay:           pay.driver_share,
+    fuel_used:     job.fuel_used      ?? null,
+    damage_percent: job.damage_percent ?? null,
+    priority:      'normal',
+    status:        'completed',
+    completed_at:  now,
+  }
+
+  // Szukaj istniejącego joba (taken lub cancelled z ostatnich 60s)
   const sixtySecAgo = new Date(Date.now() - 60_000).toISOString()
   const { data: activeJob } = await supabase
     .from('jobs')
@@ -237,18 +272,6 @@ async function handleJobDelivered(memberId: string, job: z.infer<typeof JobSchem
     .limit(1)
     .single()
 
-  const jobData = {
-    cargo:            job.cargo            ?? telRow?.cargo ?? null,
-    origin_city:      job.origin_city      ?? null,
-    destination_city: job.destination_city ?? null,
-    distance_km:      finalDistanceKm,
-    income:           pay.driver_share,
-    fuel_used:        job.fuel_used        ?? null,
-    damage_percent:   job.damage_percent   ?? null,
-    status:           'completed',
-    completed_at:     now,
-  }
-
   let finalJobId: string | undefined
 
   if (activeJob) {
@@ -257,7 +280,14 @@ async function handleJobDelivered(memberId: string, job: z.infer<typeof JobSchem
   } else {
     const { data: inserted } = await supabase
       .from('jobs')
-      .insert({ member_id: memberId, source: 'bridge', created_at: now, ...jobData })
+      .insert({
+        member_id:   memberId,
+        source:      'bridge',
+        server:      'EU1',
+        notes:       null,
+        created_at:  now,
+        ...jobData,
+      })
       .select('id').single()
     finalJobId = inserted?.id
   }
@@ -267,7 +297,7 @@ async function handleJobDelivered(memberId: string, job: z.infer<typeof JobSchem
     p_amount:      pay.driver_share,
     p_type:        'job_pay',
     p_job_id:      finalJobId ?? null,
-    p_description: `Job ${job.origin_city ?? '?'} → ${job.destination_city ?? '?'}`,
+    p_description: `Job ${originCity ?? '?'} → ${destinationCity ?? '?'}`,
     p_metadata: {
       gross:          pay.gross,
       breakdown:      pay.breakdown,
@@ -296,7 +326,6 @@ async function handleJobDelivered(memberId: string, job: z.infer<typeof JobSchem
 
 // ─── handleJobCancelled ───────────────────────────────────
 async function handleJobCancelled(memberId: string) {
-  // Anuluj tylko joby starsze niż 60s — chroni świeżo dostarczone
   const sixtySecAgo = new Date(Date.now() - 60_000).toISOString()
   await supabase
     .from('jobs')
@@ -324,8 +353,8 @@ export async function POST(req: NextRequest) {
   const payload = parsed.data
 
   const member = await resolveMember(payload.api_key)
-  if (!member)        return NextResponse.json({ ok: false, error: 'Invalid api_key' },             { status: 401 })
-  if (member.is_banned) return NextResponse.json({ ok: false, error: 'Account is banned' },         { status: 403 })
+  if (!member)          return NextResponse.json({ ok: false, error: 'Invalid api_key' },              { status: 401 })
+  if (member.is_banned) return NextResponse.json({ ok: false, error: 'Account is banned' },            { status: 403 })
   if (!checkRateLimit(member.id)) return NextResponse.json(
     { ok: false, error: 'Rate limit exceeded. Max 20 req / 10s' }, { status: 429 }
   )
