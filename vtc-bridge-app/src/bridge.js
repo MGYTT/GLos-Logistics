@@ -3,8 +3,8 @@
 const http  = require('http')
 const https = require('https')
 
-const FUNBIT_URL      = 'http://localhost:25555/api/ets2/telemetry'
-const SEND_INTERVAL   = 4_000
+const FUNBIT_URL        = 'http://localhost:25555/api/ets2/telemetry'
+const SEND_INTERVAL     = 4_000
 const DELIVERY_GRACE_MS = 12_000
 
 class Bridge {
@@ -16,7 +16,9 @@ class Bridge {
     this.funbitOk         = false
     this.failCount        = 0
     this.stats            = { sent: 0, delivered: 0, errors: 0 }
-    this._pendingDelivery = null  // { jobKey, timestamp, lastRaw }
+    this._pendingDelivery = null
+    // Zapamiętaj dane joba podczas trasy — dystans, income, cargo
+    this._activeJobData   = null
   }
 
   async start() {
@@ -32,8 +34,43 @@ class Bridge {
     this.emit('status', { type: 'stopped' })
   }
 
+  // Wyciągnij dystans całej trasy z Funbit (metry → km)
+  // job.plannedDistance = cała zaplanowana trasa (NIE remaining)
+  _extractPlannedDistance(job, navigation) {
+    const meters =
+      job?.plannedDistance        ??  // Funbit SDK — główne pole
+      job?.routeDistance          ??  // alternatywna nazwa
+      job?.totalDistance          ??  // kolejny fallback
+      navigation?.routeDistance   ??  // z navigation
+      null
+
+    if (meters && meters > 500) return Math.round(meters / 1000)
+
+    // Ostateczny fallback: estimatedDistance z momentu job_started
+    // (wtedy = cała trasa, przy dostawie = 0)
+    if (this._activeJobData?.plannedKm && this._activeJobData.plannedKm > 0) {
+      return this._activeJobData.plannedKm
+    }
+
+    return null
+  }
+
+  _extractSpeed(truck) {
+    // Funbit zwraca prędkość już w km/h
+    return Math.round(Math.abs(truck?.speed ?? 0) * 10) / 10
+  }
+
+  _extractDamage(truck) {
+    const vals = [
+      truck?.wearEngine, truck?.wearTransmission,
+      truck?.wearCabin,  truck?.wearChassis, truck?.wearWheels,
+    ].filter(v => v != null)
+    return vals.length
+      ? Math.round(vals.reduce((s, v) => s + v, 0) / vals.length * 100)
+      : 0
+  }
+
   async _tick() {
-    // 1. Pobierz telemetrię z Funbit
     let raw
     try {
       const res = await this._get(FUNBIT_URL)
@@ -53,7 +90,6 @@ class Bridge {
       return
     }
 
-    // 2. Gra niezaładowana
     if (!raw?.game?.connected) {
       this.emit('status', { type: 'waiting' })
       await this._sendOffline()
@@ -62,18 +98,39 @@ class Bridge {
 
     if (!raw?.truck) return
 
-    // 3. Wykryj stan joba
     const job    = raw.job
     const hasJob = !!(job?.sourceCity && job?.destinationCity)
     const jobKey = hasJob ? `${job.sourceCity}→${job.destinationCity}` : null
     const prevKey = this.lastJobKey
+
+    // Aktualizuj _activeJobData podczas trasy — zbieraj max dystans i income
+    if (hasJob && job) {
+      const currentDistKm = this._extractPlannedDistance(job, raw.navigation)
+      const currentIncome = (job.income ?? 0) > 0 ? job.income : null
+
+      if (!this._activeJobData || jobKey !== this._activeJobData.jobKey) {
+        // Nowy job — zresetuj
+        this._activeJobData = {
+          jobKey,
+          plannedKm: currentDistKm,
+          income:    currentIncome,
+          cargo:     raw.trailer?.name ?? raw.trailer?.id ?? null,
+        }
+      } else {
+        // Aktualizuj — zachowaj największy dystans (na początku trasy = max)
+        if (currentDistKm && (!this._activeJobData.plannedKm || currentDistKm > this._activeJobData.plannedKm)) {
+          this._activeJobData.plannedKm = currentDistKm
+        }
+        if (currentIncome) this._activeJobData.income = currentIncome
+        if (raw.trailer?.name) this._activeJobData.cargo = raw.trailer.name
+      }
+    }
 
     // ── Obsługa pending delivery ──────────────────────────
     if (this._pendingDelivery) {
       const elapsed = Date.now() - this._pendingDelivery.timestamp
 
       if (hasJob && jobKey !== this._pendingDelivery.jobKey) {
-        // Pojawił się NOWY job → poprzedni był delivered
         await this._fireDelivered(this._pendingDelivery, raw)
         this._pendingDelivery = null
         this.lastJobKey = jobKey
@@ -83,7 +140,6 @@ class Bridge {
       }
 
       if (hasJob && jobKey === this._pendingDelivery.jobKey) {
-        // Ten sam job wrócił (błąd odczytu) → kontynuuj normalnie
         this._pendingDelivery = null
         this.lastJobKey = jobKey
         const payload = this._buildPayload(raw, 'none', null)
@@ -92,13 +148,11 @@ class Bridge {
       }
 
       if (elapsed < DELIVERY_GRACE_MS) {
-        // W trakcie grace period — tick bez zdarzenia
         const payload = this._buildPayload(raw, 'none', null)
         await this._sendPayload(payload, raw, 'none', null)
         return
       }
 
-      // Grace period minął — jeśli gra połączona to DELIVERED, inaczej cancelled
       if (raw?.game?.connected && raw?.truck) {
         await this._fireDelivered(this._pendingDelivery, raw)
       } else {
@@ -117,7 +171,6 @@ class Bridge {
     } else if (hasJob && jobKey !== this.lastJobKey) {
       event = 'job_started'
     } else if (!hasJob && this.lastJobKey !== null) {
-      // Job zniknął → ustaw pending, NIE cancelled od razu
       this._pendingDelivery = {
         jobKey:    this.lastJobKey,
         timestamp: Date.now(),
@@ -137,9 +190,6 @@ class Bridge {
     }
   }
 
-  // ── _fireDelivered ─────────────────────────────────────
-  // pending.lastRaw = dane gdy job jeszcze istniał (dystans, cargo, income)
-  // currentRaw      = dane teraz (pozycja, paliwo po dostawie)
   async _fireDelivered(pending, currentRaw) {
     const { jobKey, lastRaw } = pending
     const [originCity, destinationCity] = jobKey.split('→')
@@ -154,21 +204,14 @@ class Bridge {
       if (res.status === 200 && res.body?.ok) {
         this.stats.sent++
         this.stats.delivered++
+        this._activeJobData = null  // Wyczyść po dostawie
         this.emit('job_event', { event: 'job_delivered', jobKey })
         this.emit('telemetry', {
-          connected:  true,
-          hasJob:     false,
-          event:      'job_delivered',
-          speed:      0,
-          fuelPct:    0,
-          damage:     0,
-          jobKey,
-          from:       originCity,
-          to:         destinationCity,
-          cargo:      null,
-          truckModel: '',
-          income:     null,
-          stats:      { ...this.stats },
+          connected: true, hasJob: false, event: 'job_delivered',
+          speed: 0, fuelPct: 0, damage: 0, jobKey,
+          from: originCity, to: destinationCity,
+          cargo: null, truckModel: '', income: null,
+          stats: { ...this.stats },
         })
       } else if (res.status === 401) {
         this.emit('error', { type: 'auth', message: 'Nieprawidłowy klucz API' })
@@ -184,6 +227,7 @@ class Bridge {
   }
 
   _fireCancelled(jobKey) {
+    this._activeJobData = null
     this.emit('job_event', { event: 'job_cancelled', jobKey })
   }
 
@@ -203,19 +247,11 @@ class Bridge {
         this.stats.sent++
         if (event === 'job_delivered') this.stats.delivered++
 
-        // FIX: Funbit zwraca m/s → przelicz na km/h (* 3.6)
-        const speed   = Math.round(Math.abs(truck?.speed ?? 0) * 10) / 10
+        const speed   = this._extractSpeed(truck)
         const fuel    = truck?.fuel         ?? 0
         const fuelCap = truck?.fuelCapacity ?? 1
         const fuelPct = Math.round((fuel / fuelCap) * 100)
-
-        const wearValues = [
-          truck?.wearEngine, truck?.wearTransmission,
-          truck?.wearCabin,  truck?.wearChassis, truck?.wearWheels,
-        ].filter(v => v != null)
-        const damage = wearValues.length
-          ? Math.round(wearValues.reduce((s, v) => s + v, 0) / wearValues.length * 100)
-          : 0
+        const damage  = this._extractDamage(truck)
 
         this.emit('telemetry', {
           connected:  true,
@@ -253,37 +289,37 @@ class Bridge {
     }
   }
 
-  // lastRaw = dane z momentu gdy job jeszcze istniał (dystans, cargo, income)
-  // currentRaw = dane teraz po dostawie (pozycja, paliwo)
   _buildPayloadDelivered(lastRaw, currentRaw, deliveredJob) {
-    const { game, truck: cTruck }                          = currentRaw ?? {}
-    const { job: lJob, trailer: lTrailer, navigation: lNav, truck: lTruck } = lastRaw  ?? {}
+    const { game, truck: cTruck }                                            = currentRaw ?? {}
+    const { job: lJob, trailer: lTrailer, navigation: lNav, truck: lTruck } = lastRaw    ?? {}
 
     const placement = cTruck?.placement ?? {}
+    const speedKmh  = this._extractSpeed(cTruck)
+    const damage    = this._extractDamage(lTruck)
 
-    // FIX: Funbit m/s → km/h
-    const speedKmh = Math.round(Math.abs(cTruck?.speed ?? 0) * 10) / 10
-
-    const wearValues = [
-      lTruck?.wearEngine, lTruck?.wearTransmission,
-      lTruck?.wearCabin,  lTruck?.wearChassis, lTruck?.wearWheels,
-    ].filter(v => v != null)
-    const damage = wearValues.length
-      ? Math.round(wearValues.reduce((s, v) => s + v, 0) / wearValues.length * 100)
-      : 0
-
-    // Paliwo zużyte = capacity - obecny poziom paliwa (po dostawie)
     const fuelUsed = (cTruck?.fuelCapacity && cTruck?.fuel != null)
       ? Math.max(0, Math.round(cTruck.fuelCapacity - cTruck.fuel))
       : null
 
-    // Dystans z lastRaw (gdy job jeszcze aktywny) — Funbit w metrach → km
-    const distKm = lNav?.estimatedDistance
-      ? Math.round(lNav.estimatedDistance / 1000)
-      : null
+    // FIX: użyj plannedDistance (cała trasa) zamiast estimatedDistance (pozostały = 0 przy dostawie)
+    // Fallback na _activeJobData.plannedKm zebrany podczas jazdy
+    const distKm =
+      this._extractPlannedDistance(lJob, lNav) ??
+      this._activeJobData?.plannedKm            ??
+      null
 
-    // Income z ostatniego stanu aktywnego joba
-    const income = (lJob?.income ?? 0) > 0 ? lJob.income : null
+    // Income — z aktywnych danych joba lub z _activeJobData
+    const income =
+      ((lJob?.income ?? 0) > 0 ? lJob.income : null) ??
+      this._activeJobData?.income ??
+      null
+
+    // Cargo — z trailera lub z _activeJobData
+    const cargo =
+      lTrailer?.name ??
+      lTrailer?.id   ??
+      this._activeJobData?.cargo ??
+      null
 
     return {
       api_key:  this.config.api_key,
@@ -296,19 +332,19 @@ class Bridge {
       delivered_job: {
         origin_city:      deliveredJob.origin_city,
         destination_city: deliveredJob.destination_city,
-        cargo:            lTrailer?.name ?? lTrailer?.id ?? null,
+        cargo,
         distance_km:      distKm,
-        income:           income,
+        income,
         fuel_used:        fuelUsed,
         damage_percent:   damage,
       },
       telemetry: {
-        has_job:       false,
-        fuel_liters:   cTruck?.fuel          ?? null,
-        fuel_capacity: cTruck?.fuelCapacity  ?? null,
-        truck_brand:   cTruck?.make          ?? null,
-        truck_model:   cTruck?.model         ?? null,
-        speed_kmh:     speedKmh,
+        has_job:        false,
+        fuel_liters:    cTruck?.fuel         ?? null,
+        fuel_capacity:  cTruck?.fuelCapacity ?? null,
+        truck_brand:    cTruck?.make         ?? null,
+        truck_model:    cTruck?.model        ?? null,
+        speed_kmh:      speedKmh,
         damage_percent: damage,
       },
     }
@@ -317,24 +353,18 @@ class Bridge {
   _buildPayload(raw, event, prevKey) {
     const { game, truck, job, trailer, navigation } = raw ?? {}
     const hasJob    = !!(job?.sourceCity && job?.destinationCity)
-    // FIX: Funbit m/s → km/h
-    const speedKmh  = Math.round(Math.abs(truck?.speed ?? 0) * 10) / 10
+    const speedKmh  = this._extractSpeed(truck)
     const placement = truck?.placement ?? {}
-
-    const wearValues = [
-      truck?.wearEngine, truck?.wearTransmission,
-      truck?.wearCabin,  truck?.wearChassis, truck?.wearWheels,
-    ].filter(v => v != null)
-    const damage = wearValues.length
-      ? Math.round(wearValues.reduce((s, v) => s + v, 0) / wearValues.length * 100)
-      : 0
+    const damage    = this._extractDamage(truck)
 
     const fuelUsed = (truck?.fuelCapacity && truck?.fuel != null)
       ? Math.max(0, Math.round(truck.fuelCapacity - truck.fuel))
       : null
 
-    // Funbit estimatedDistance w metrach → km
-    const distKm = navigation?.estimatedDistance
+    // FIX: job_max_distance = plannedDistance (cała trasa) — wysyłaj do telemetrii
+    // estimatedDistance = pozostały — nie używaj jako dystans trasy
+    const plannedKm  = this._extractPlannedDistance(job, navigation)
+    const remainKm   = navigation?.estimatedDistance
       ? Math.round(navigation.estimatedDistance / 1000)
       : null
 
@@ -348,8 +378,8 @@ class Bridge {
         cargo:            trailer?.name ?? trailer?.id ?? null,
         origin_city:      job.sourceCity,
         destination_city: job.destinationCity,
-        distance_km:      distKm,
-        income:           job.income ?? null,
+        distance_km:      plannedKm,   // cała trasa
+        income:           job.income   ?? null,
         fuel_used:        null,
         damage_percent:   damage,
       } : null,
@@ -358,25 +388,26 @@ class Bridge {
         origin_city:      prevKey?.split('→')[0] ?? job?.sourceCity      ?? null,
         destination_city: prevKey?.split('→')[1] ?? job?.destinationCity ?? null,
         cargo:            trailer?.name ?? trailer?.id ?? null,
-        distance_km:      distKm,
+        distance_km:      plannedKm,
         income:           job?.income ?? null,
         fuel_used:        fuelUsed,
         damage_percent:   damage,
       } : undefined,
       telemetry: {
         has_job:               hasJob,
-        from_city:             job?.sourceCity          ?? null,
-        to_city:               job?.destinationCity     ?? null,
-        from_company:          job?.sourceCompany       ?? null,
-        to_company:            job?.destinationCompany  ?? null,
-        cargo:                 trailer?.name            ?? null,
-        cargo_weight_kg:       trailer?.mass            ?? null,
-        income:                job?.income              ?? null,
-        distance_remaining_km: distKm,
-        truck_brand:           truck?.make              ?? null,
-        truck_model:           truck?.model             ?? null,
-        fuel_liters:           truck?.fuel              ?? null,
-        fuel_capacity:         truck?.fuelCapacity      ?? null,
+        from_city:             job?.sourceCity         ?? null,
+        to_city:               job?.destinationCity    ?? null,
+        from_company:          job?.sourceCompany      ?? null,
+        to_company:            job?.destinationCompany ?? null,
+        cargo:                 trailer?.name           ?? null,
+        cargo_weight_kg:       trailer?.mass           ?? null,
+        income:                job?.income             ?? null,
+        job_max_distance:      plannedKm,   // cała trasa do telemetrii (fallback w API)
+        distance_remaining_km: remainKm,    // pozostały dystans
+        truck_brand:           truck?.make  ?? null,
+        truck_model:           truck?.model ?? null,
+        fuel_liters:           truck?.fuel  ?? null,
+        fuel_capacity:         truck?.fuelCapacity ?? null,
         damage_percent:        damage,
       },
     }
