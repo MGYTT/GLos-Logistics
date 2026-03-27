@@ -152,6 +152,24 @@ function buildJobCityFields(originCity?: string | null, destinationCity?: string
 // ─── handleJobStarted ─────────────────────────────────────
 async function handleJobStarted(memberId: string, job: z.infer<typeof JobSchema>) {
   const thirtySecAgo = new Date(Date.now() - 30_000).toISOString()
+
+  // FIX: nie duplikuj — jeśli identyczny taken job istnieje z ostatnich 30s, pomiń
+  const { data: existing } = await supabase
+    .from('jobs')
+    .select('id')
+    .eq('member_id', memberId)
+    .eq('status', 'taken')
+    .eq('source', 'bridge')
+    .gte('created_at', thirtySecAgo)
+    .limit(1)
+    .maybeSingle()
+
+  if (existing) {
+    console.log('[Bridge] handleJobStarted: duplikat — pomijam')
+    return { data: null, error: null }
+  }
+
+  // Anuluj stare taken (starsze niż 30s)
   await supabase
     .from('jobs')
     .update({ status: 'cancelled' })
@@ -193,17 +211,18 @@ async function handleJobDelivered(memberId: string, job: z.infer<typeof JobSchem
     .eq('member_id', memberId)
     .maybeSingle()
 
-  // Nigdy nie blokuj — zapisz z dystansem 0 gdy brak danych
   const finalDistanceKm =
-    (job.distance_km    && job.distance_km    > 0) ? job.distance_km    :
+    (job.distance_km         && job.distance_km         > 0) ? job.distance_km :
     (telRow?.job_max_distance && telRow.job_max_distance > 0) ? telRow.job_max_distance :
     0
 
-  const finalIncome =
-    (job.income && job.income > 0) ? job.income :
-    (telRow?.income ?? 0)
+  // FIX: income z gry = wartość zlecenia (przed podziałem na kierowcę/firmę)
+  const gameIncome =
+    (job.income        && job.income        > 0) ? job.income :
+    (telRow?.income    && telRow.income     > 0) ? telRow.income :
+    0
 
-  console.log(`[Bridge] handleJobDelivered: dist=${finalDistanceKm}km income=${finalIncome} member=${memberId}`)
+  console.log(`[Bridge] handleJobDelivered: dist=${finalDistanceKm}km gameIncome=${gameIncome} member=${memberId}`)
 
   const { data: fuelRow } = await supabase
     .from('fuel_prices').select('price')
@@ -213,16 +232,30 @@ async function handleJobDelivered(memberId: string, job: z.infer<typeof JobSchem
   const fuelPrice = fuelRow?.price ?? 2.8
 
   const { calculateJobPay } = await import('@/lib/vtc/payCalculator')
+
+  // FIX: fuel_used z Bridge = fuelCapacity - currentFuel (nie realne zużycie)
+  // Funbit nie podaje zużycia paliwa per trasa — ignoruj żeby nie karać gracza
   const pay = calculateJobPay({
     distance_km:      finalDistanceKm,
     cargo_units:      1,
-    fuel_used_liters: job.fuel_used      ?? null,
+    fuel_used_liters: null,        // FIX: zawsze null — Bridge nie mierzy poprawnie
     damage_percent:   job.damage_percent ?? 0,
     cargo_type:       null,
     had_fine:         false,
     fine_amount:      0,
     fuel_price:       fuelPrice,
   })
+
+  // FIX: jeśli kalkulator dał < 10% gameIncome — użyj gameIncome jako bazy
+  // (np. krótkie trasy miejskie gdzie dystans = 12km ale gra daje 771€)
+  const calculatedShare = pay.driver_share
+  const gameBasedShare  = Math.round(gameIncome * 0.85)
+  const driverShare     = calculatedShare > gameBasedShare
+    ? calculatedShare
+    : gameBasedShare
+  const companyShare    = Math.round(gameIncome * 0.15)
+
+  console.log(`[Bridge] pay: calc=${calculatedShare} gameBased=${gameBasedShare} → using=${driverShare}`)
 
   const originCity      = job.origin_city      ?? telRow?.from_city ?? null
   const destinationCity = job.destination_city ?? telRow?.to_city   ?? null
@@ -234,27 +267,28 @@ async function handleJobDelivered(memberId: string, job: z.infer<typeof JobSchem
     cargo_weight:   0,
     trailer_type:   'unknown',
     distance_km:    finalDistanceKm,
-    income:         pay.driver_share,
-    pay:            pay.driver_share,
-    fuel_used:      job.fuel_used      ?? null,
+    income:         driverShare,
+    pay:            driverShare,
+    fuel_used:      null,              // FIX: nie zapisuj błędnego fuel_used
     damage_percent: job.damage_percent ?? null,
     priority:       'normal',
     status:         'completed',
     completed_at:   now,
   }
 
-  // FIX: rozszerzone okno do 3 minut — obsługuje grace period + opóźnienia sieciowe
-  const threeMinAgo = new Date(Date.now() - 180_000).toISOString()
+  // FIX: szukaj TYLKO najnowszego taken z ostatnich 6 minut
+  // (nie cancelled — żeby nie nadpisywać anulowanych starych jobów)
+  const sixMinAgo = new Date(Date.now() - 360_000).toISOString()
   const { data: activeJob } = await supabase
     .from('jobs')
-    .select('id')
+    .select('id, created_at')
     .eq('member_id', memberId)
-    .in('status', ['taken', 'cancelled'])
+    .eq('status', 'taken')
     .eq('source', 'bridge')
-    .gte('created_at', threeMinAgo)
+    .gte('created_at', sixMinAgo)
     .order('created_at', { ascending: false })
     .limit(1)
-    .single()
+    .maybeSingle()
 
   let finalJobId: string | undefined
 
@@ -265,7 +299,7 @@ async function handleJobDelivered(memberId: string, job: z.infer<typeof JobSchem
     else console.log(`[Bridge] job updated: ${activeJob.id} → completed`)
     finalJobId = activeJob.id
   } else {
-    // Brak aktywnego joba — wstaw nowy completed
+    // Brak taken — wstaw nowy completed
     const { data: inserted, error: insertErr } = await supabase
       .from('jobs')
       .insert({
@@ -282,41 +316,40 @@ async function handleJobDelivered(memberId: string, job: z.infer<typeof JobSchem
     finalJobId = inserted?.id
   }
 
-  console.log(`[Bridge] job saved: ${finalJobId} | dist: ${finalDistanceKm}km | pay: ${pay.driver_share}`)
+  console.log(`[Bridge] saved: ${finalJobId} | dist: ${finalDistanceKm}km | pay: ${driverShare}`)
 
   const { error: walletErr } = await supabase.rpc('credit_wallet', {
     p_member_id:   memberId,
-    p_amount:      pay.driver_share,
+    p_amount:      driverShare,
     p_type:        'job_pay',
     p_job_id:      finalJobId ?? null,
     p_description: `Job ${originCity ?? '?'} → ${destinationCity ?? '?'}`,
     p_metadata: {
-      gross:          pay.gross,
+      gross:          gameIncome,
       breakdown:      pay.breakdown,
       distance_km:    finalDistanceKm,
       damage_percent: job.damage_percent,
-      game_income:    finalIncome,
+      game_income:    gameIncome,
     },
   })
   if (walletErr) console.error('[Bridge] credit_wallet error:', walletErr)
 
   const { error: companyErr } = await supabase.rpc('credit_company', {
-    p_amount:      pay.company_share,
+    p_amount:      companyShare,
     p_type:        'company_tax',
     p_member_id:   memberId,
     p_description: `Podatek firmowy — Job ${finalJobId?.slice(0, 8) ?? '?'}`,
   })
   if (companyErr) console.error('[Bridge] credit_company error:', companyErr)
 
-  const bonusPoints = Math.floor(finalDistanceKm / 100)
-  if (bonusPoints > 0) {
-    const { error: pointsErr } = await supabase.rpc('increment_member_points', {
-      p_member_id: memberId, p_points: bonusPoints,
-    })
-    if (pointsErr) console.error('[Bridge] increment_member_points error:', pointsErr)
-  }
+  const bonusPoints = Math.max(1, Math.floor(finalDistanceKm / 100))
+  const { error: pointsErr } = await supabase.rpc('increment_member_points', {
+    p_member_id: memberId, p_points: bonusPoints,
+  })
+  if (pointsErr) console.error('[Bridge] increment_member_points error:', pointsErr)
 
-  return pay
+  // Zwróć ujednolicony obiekt z driverShare
+  return { ...pay, driver_share: driverShare, company_share: companyShare }
 }
 
 // ─── handleJobCancelled ───────────────────────────────────
