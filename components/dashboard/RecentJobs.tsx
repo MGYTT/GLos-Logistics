@@ -33,9 +33,9 @@ function normalizeJob(j: any): Job {
 }
 
 export function RecentJobs({ memberId, initialJobs }: Props) {
-  const supabase             = createClient()
-  const [jobs, setJobs]      = useState<Job[]>(initialJobs)
-  const [isPending, startT]  = useTransition()
+  const supabase               = createClient()
+  const [jobs, setJobs]        = useState<Job[]>(initialJobs)
+  const [isPending, startT]    = useTransition()
   const [newJobId, setNewJobId] = useState<string | null>(null)
 
   const fetchJobs = async () => {
@@ -51,7 +51,6 @@ export function RecentJobs({ memberId, initialJobs }: Props) {
   }
 
   useEffect(() => {
-    // Realtime — nowe joby
     const channel = supabase
       .channel(`recent_jobs_${memberId}`)
       .on(
@@ -60,14 +59,14 @@ export function RecentJobs({ memberId, initialJobs }: Props) {
         (payload: any) => {
           const row = payload.new
           if (row?.member_id !== memberId && row?.created_by !== memberId) return
+          // Przy INSERT pokaż tylko completed (ręczne zlecenia mogą być od razu completed)
+          if (row.status !== 'completed') return
 
           const newJob = normalizeJob(row)
           setNewJobId(newJob.id)
           setJobs(prev => [newJob, ...prev].slice(0, 10))
-
-          // Usuń highlight po 4s
           setTimeout(() => setNewJobId(null), 4_000)
-        }
+        },
       )
       .on(
         'postgres_changes',
@@ -75,10 +74,26 @@ export function RecentJobs({ memberId, initialJobs }: Props) {
         (payload: any) => {
           const row = payload.new
           if (row?.member_id !== memberId && row?.created_by !== memberId) return
-          setJobs(prev =>
-            prev.map(j => j.id === row.id ? normalizeJob(row) : j)
-          )
-        }
+
+          if (row.status === 'completed') {
+            // FIX: job właśnie dostarczony — dodaj do listy lub zaktualizuj jeśli już jest
+            const normalized = normalizeJob(row)
+            setJobs(prev => {
+              const exists = prev.find(j => j.id === row.id)
+              if (exists) {
+                // Już na liście — zaktualizuj
+                return prev.map(j => j.id === row.id ? normalized : j)
+              }
+              // Nowy completed job — dodaj na górę z animacją
+              setNewJobId(normalized.id)
+              setTimeout(() => setNewJobId(null), 4_000)
+              return [normalized, ...prev].slice(0, 10)
+            })
+          } else {
+            // Job anulowany lub zmienił status — usuń z listy
+            setJobs(prev => prev.filter(j => j.id !== row.id))
+          }
+        },
       )
       .subscribe()
 
@@ -140,7 +155,7 @@ export function RecentJobs({ memberId, initialJobs }: Props) {
 
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-white truncate">
-                    {job.cargo}
+                    {job.cargo ?? '—'}
                   </p>
                   <div className="flex items-center gap-1 text-xs text-zinc-500 mt-0.5">
                     <span className="truncate max-w-[80px]">{job.origin_city}</span>
@@ -151,7 +166,7 @@ export function RecentJobs({ memberId, initialJobs }: Props) {
 
                 <div className="text-right space-y-1 shrink-0">
                   <p className="text-sm font-bold text-green-400">
-                    €{job.income.toLocaleString('pl-PL')}
+                    €{(job.income ?? 0).toLocaleString('pl-PL')}
                   </p>
                   <div className="flex items-center gap-1.5 justify-end">
                     <span className="text-[10px] text-zinc-600">{job.distance_km} km</span>
