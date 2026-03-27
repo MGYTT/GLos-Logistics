@@ -1,24 +1,44 @@
 'use client'
-import { useState, useMemo } from 'react'
-import { JobCard } from './JobCard'
+import { useState, useMemo, useEffect } from 'react'
+import { JobCard }        from './JobCard'
 import { JobCreateModal } from './JobCreateModal'
 import { JobDetailModal } from './JobDetailModal'
-import { ActiveDrivers } from './ActiveDrivers'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { ActiveDrivers }  from './ActiveDrivers'
+import { Button }         from '@/components/ui/button'
+import { Input }          from '@/components/ui/input'
 import {
   Select, SelectContent, SelectItem,
   SelectTrigger, SelectValue,
 } from '@/components/ui/select'
 import {
   Plus, Search, SlidersHorizontal,
-  Truck, Package, CheckCircle2, Clock
+  Truck, Package, CheckCircle2, Clock,
 } from 'lucide-react'
+import { createClient }                  from '@/lib/supabase/client'
 import { PRIORITY_CONFIG, STATUS_CONFIG } from '@/lib/ets2/data'
-import type { Job } from '@/types/jobs'
+import type { Job }                      from '@/types/jobs'
 
 interface Member { id: string; username: string; rank: string }
 interface Props   { jobs: Job[]; currentUser: Member }
+
+// Tylko pola które są w types/jobs.ts — bez origin_city/destination_city/income/member_id
+function normalizeJob(j: any): Job {
+  return {
+    ...j,
+    title:        j.title        ?? '—',
+    from_city:    j.from_city    ?? '—',
+    to_city:      j.to_city      ?? '—',
+    cargo:        j.cargo        ?? '—',
+    priority:     j.priority     ?? 'normal',
+    cargo_weight: j.cargo_weight ?? 0,
+    pay:          j.pay          ?? 0,
+    distance_km:  j.distance_km  ?? 0,
+    taken_by:     j.taken_by     ?? null,
+    trailer_type: j.trailer_type ?? '',
+    truck:        j.truck        ?? null,
+    server:       j.server       ?? 'EU1',
+  }
+}
 
 function StatCards({ jobs }: { jobs: Job[] }) {
   const stats = [
@@ -31,22 +51,22 @@ function StatCards({ jobs }: { jobs: Job[] }) {
     },
     {
       label: 'W trakcie',
-      value: jobs.filter(j => j.status === 'in_progress').length,
+      value: jobs.filter(j => j.status === 'in_progress' || j.status === 'taken').length,
       icon:  Truck,
       color: 'text-blue-400',
       bg:    'bg-blue-400/10',
     },
     {
-      label: 'Oczekujące',
-      value: jobs.filter(j => j.status === 'taken').length,
-      icon:  Clock,
+      label: 'Ukończone',
+      value: jobs.filter(j => j.status === 'completed').length,
+      icon:  CheckCircle2,
       color: 'text-amber-400',
       bg:    'bg-amber-400/10',
     },
     {
-      label: 'Ukończone',
-      value: jobs.filter(j => j.status === 'completed').length,
-      icon:  CheckCircle2,
+      label: 'Anulowane',
+      value: jobs.filter(j => j.status === 'cancelled').length,
+      icon:  Clock,
       color: 'text-zinc-400',
       bg:    'bg-zinc-400/10',
     },
@@ -70,12 +90,37 @@ function StatCards({ jobs }: { jobs: Job[] }) {
 }
 
 export function JobsBoard({ jobs: initial, currentUser }: Props) {
-  const [jobs, setJobs]               = useState<Job[]>(initial)
-  const [search, setSearch]           = useState('')
-  const [filterStatus, setFilterStatus]     = useState<string>('open')
+  const supabase = createClient()
+
+  const [jobs, setJobs]                     = useState<Job[]>(initial.map(normalizeJob))
+  const [search, setSearch]                 = useState('')
+  const [filterStatus, setFilterStatus]     = useState<string>('all')
   const [filterPriority, setFilterPriority] = useState<string>('all')
-  const [selectedJob, setSelectedJob]   = useState<Job | null>(null)
-  const [showCreate, setShowCreate]     = useState(false)
+  const [selectedJob, setSelectedJob]       = useState<Job | null>(null)
+  const [showCreate, setShowCreate]         = useState(false)
+
+  useEffect(() => {
+    const channel = supabase
+      .channel('jobs_board_realtime')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'jobs' },
+        ({ new: row }) => {
+          setJobs(prev => [normalizeJob(row), ...prev])
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'jobs' },
+        ({ new: row }) => {
+          setJobs(prev => prev.map(j => j.id === row.id ? normalizeJob(row) : j))
+          setSelectedJob(prev => prev?.id === row.id ? normalizeJob(row) : prev)
+        },
+      )
+      .subscribe()
+
+    return () => { supabase.removeChannel(channel) }
+  }, [])
 
   const filtered = useMemo(() =>
     jobs
@@ -89,26 +134,22 @@ export function JobsBoard({ jobs: initial, currentUser }: Props) {
           || j.cargo.toLowerCase().includes(q)
           || j.title.toLowerCase().includes(q)
       }),
-    [jobs, search, filterStatus, filterPriority]
+    [jobs, search, filterStatus, filterPriority],
   )
 
   function handleJobCreated(job: Job) {
-    setJobs(prev => [job, ...prev])
+    setJobs(prev => [normalizeJob(job), ...prev])
     setShowCreate(false)
   }
 
   function handleJobUpdated(updated: Job) {
-    setJobs(prev => prev.map(j => j.id === updated.id ? updated : j))
-    setSelectedJob(updated)
+    setJobs(prev => prev.map(j => j.id === updated.id ? normalizeJob(updated) : j))
+    setSelectedJob(normalizeJob(updated))
   }
 
   return (
     <div className="space-y-6">
-
-      {/* Kierowcy w trasie — realtime */}
       <ActiveDrivers />
-
-      {/* Statystyki */}
       <StatCards jobs={jobs} />
 
       {/* Filtry + dodaj */}
@@ -179,14 +220,12 @@ export function JobsBoard({ jobs: initial, currentUser }: Props) {
         </div>
       )}
 
-      {/* Licznik */}
       {filtered.length > 0 && (
         <p className="text-xs text-zinc-600 text-right">
           Wyświetlono {filtered.length} z {jobs.length} zleceń
         </p>
       )}
 
-      {/* Modals */}
       {showCreate && (
         <JobCreateModal
           currentUser={currentUser}
