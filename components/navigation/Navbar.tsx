@@ -9,7 +9,7 @@ import {
 } from 'framer-motion'
 import { Button }                from '@/components/ui/button'
 import { MobileNav }             from './MobileNav'
-import { Truck, Gauge }          from 'lucide-react'
+import { Truck, Gauge, Heart }   from 'lucide-react'
 import { cn }                    from '@/lib/utils/cn'
 
 const navLinks = [
@@ -22,13 +22,12 @@ const navLinks = [
 ]
 
 export function Navbar() {
-  const pathname             = usePathname()
+  const pathname               = usePathname()
   const [scrolled, setScrolled] = useState(false)
   const [hidden,   setHidden]   = useState(false)
   const [lastY,    setLastY]    = useState(0)
   const { scrollY } = useScroll()
 
-  // Ukryj navbar w /hub — tam jest HubSidebar
   if (pathname.startsWith('/hub') || pathname.startsWith('/admin')) return null
 
   useMotionValueEvent(scrollY, 'change', (y) => {
@@ -104,6 +103,38 @@ export function Navbar() {
               </motion.div>
             )
           })}
+
+          {/* ── Wsparcie — subtelny separator + przycisk ── */}
+          <div className="w-px h-4 bg-zinc-800 mx-1.5" />
+
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.04 * navLinks.length, duration: 0.3 }}
+          >
+            <Link
+              href="/support"
+              className={cn(
+                'relative flex items-center gap-1.5 px-3 py-1.5 rounded-lg',
+                'text-xs font-medium transition-all duration-200',
+                pathname === '/support'
+                  ? 'text-red-400 bg-red-500/10 border border-red-500/20'
+                  : 'text-zinc-600 hover:text-red-400 hover:bg-red-500/5 border border-transparent',
+              )}
+            >
+              <motion.div
+                animate={
+                  pathname !== '/support'
+                    ? { scale: [1, 1.25, 1] }
+                    : {}
+                }
+                transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut', repeatDelay: 3 }}
+              >
+                <Heart className="w-3 h-3 fill-current" />
+              </motion.div>
+              Wesprzyj
+            </Link>
+          </motion.div>
         </nav>
 
         {/* CTA */}

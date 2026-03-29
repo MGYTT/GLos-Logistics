@@ -3,7 +3,6 @@ import { StatsSection } from '@/components/landing/StatsSection'
 import { FeaturesSection } from '@/components/landing/FeaturesSection'
 import { RecruitSection } from '@/components/landing/RecruitSection'
 import { Navbar } from '@/components/navigation/Navbar'
-import { SupportSection } from '@/components/landing/SupportSection'
 import { createClient } from '@/lib/supabase/server'
 
 export default async function HomePage() {
@@ -42,7 +41,6 @@ export default async function HomePage() {
           totalKm={totalKm}
         />
         <FeaturesSection />
-        <SupportSection />
         <RecruitSection />
       </main>
     </>
