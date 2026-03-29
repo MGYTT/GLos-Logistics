@@ -1,12 +1,12 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import Link                     from 'next/link'
-import { usePathname }          from 'next/navigation'
-import { Menu, X, Gauge, Truck } from 'lucide-react'
-import { Button }               from '@/components/ui/button'
-import { motion, AnimatePresence } from 'framer-motion'
-import { cn }                   from '@/lib/utils/cn'
+import { useState, useEffect }     from 'react'
+import Link                         from 'next/link'
+import { usePathname }              from 'next/navigation'
+import { Menu, X, Gauge, Heart }    from 'lucide-react'
+import { Button }                   from '@/components/ui/button'
+import { motion, AnimatePresence }  from 'framer-motion'
+import { cn }                       from '@/lib/utils/cn'
 
 const navLinks = [
   { href: '/',            label: 'Strona główna', emoji: '🏠' },
@@ -19,23 +19,23 @@ const navLinks = [
 ]
 
 export function MobileNav() {
-  const [open, setOpen]   = useState(false)
-  const pathname          = usePathname()
+  const [open, setOpen] = useState(false)
+  const pathname        = usePathname()
 
-  // Zamknij menu przy zmianie strony
   useEffect(() => { setOpen(false) }, [pathname])
 
-  // Zablokuj scroll body gdy menu otwarte
   useEffect(() => {
     document.body.style.overflow = open ? 'hidden' : ''
     return () => { document.body.style.overflow = '' }
   }, [open])
 
-  // Ukryj w /hub i /admin — tam są własne nawigacje
   if (pathname.startsWith('/hub') || pathname.startsWith('/admin')) return null
+
+  const isSupportActive = pathname === '/support'
 
   return (
     <div className="md:hidden">
+
       {/* Burger */}
       <motion.button
         onClick={() => setOpen(v => !v)}
@@ -86,6 +86,8 @@ export function MobileNav() {
                        shadow-2xl shadow-black/40"
           >
             <div className="px-4 py-3 space-y-0.5">
+
+              {/* Linki nawigacyjne */}
               {navLinks.map((link, i) => {
                 const isActive = pathname === link.href
                 return (
@@ -115,18 +117,66 @@ export function MobileNav() {
                 )
               })}
 
-              {/* CTA */}
+              {/* ── Separator + Wesprzyj ────────────────────── */}
+              <motion.div
+                initial={{ opacity: 0, x: -12 }}
+                animate={{ opacity: 1, x: 0   }}
+                transition={{ delay: 0.03 * navLinks.length, duration: 0.2 }}
+              >
+                <div className="h-px bg-zinc-800/80 mx-1 my-1" />
+                <Link
+                  href="/support"
+                  className={cn(
+                    'flex items-center gap-3 px-3 py-3 rounded-xl',
+                    'text-sm font-medium transition-colors',
+                    isSupportActive
+                      ? 'bg-red-500/10 text-red-400 border border-red-500/20'
+                      : 'text-zinc-600 hover:text-red-400 hover:bg-red-500/5',
+                  )}
+                >
+                  <motion.span
+                    className="text-base w-5 text-center"
+                    animate={
+                      !isSupportActive
+                        ? { scale: [1, 1.3, 1] }
+                        : {}
+                    }
+                    transition={{
+                      duration: 1.4,
+                      repeat: Infinity,
+                      ease: 'easeInOut',
+                      repeatDelay: 4,
+                    }}
+                  >
+                    <Heart className={cn(
+                      'w-4 h-4 mx-auto',
+                      isSupportActive ? 'fill-red-400 text-red-400' : 'text-zinc-600',
+                    )} />
+                  </motion.span>
+                  Wesprzyj nas
+                  {isSupportActive && (
+                    <span className="ml-auto w-1.5 h-1.5 rounded-full bg-red-400" />
+                  )}
+                  {!isSupportActive && (
+                    <span className="ml-auto text-[10px] font-bold text-zinc-700
+                                     bg-zinc-800 px-2 py-0.5 rounded-full">
+                      od 15 PLN
+                    </span>
+                  )}
+                </Link>
+              </motion.div>
+
+              {/* ── CTA: Zaloguj + Hub ──────────────────────── */}
               <motion.div
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.18, duration: 0.2 }}
-                className="pt-3 mt-1 border-t border-white/8 grid grid-cols-2 gap-2"
+                transition={{ delay: 0.22, duration: 0.2 }}
+                className="pt-3 mt-1 border-t border-white/[0.06] grid grid-cols-2 gap-2"
               >
                 <Link href="/login">
                   <Button
                     variant="outline" size="sm"
-                    className="w-full border-zinc-700 text-zinc-300
-                               hover:text-white"
+                    className="w-full border-zinc-700 text-zinc-300 hover:text-white"
                   >
                     Zaloguj
                   </Button>
@@ -144,7 +194,6 @@ export function MobileNav() {
               </motion.div>
             </div>
 
-            {/* Dolna dekoracja */}
             <div className="h-safe-area-inset-bottom" />
           </motion.div>
         )}
