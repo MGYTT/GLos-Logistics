@@ -1,9 +1,10 @@
-import { HeroSection } from '@/components/landing/HeroSection'
-import { StatsSection } from '@/components/landing/StatsSection'
+import { HeroSection }     from '@/components/landing/HeroSection'
+import { StatsSection }    from '@/components/landing/StatsSection'
 import { FeaturesSection } from '@/components/landing/FeaturesSection'
-import { RecruitSection } from '@/components/landing/RecruitSection'
-import { Navbar } from '@/components/navigation/Navbar'
-import { createClient } from '@/lib/supabase/server'
+import { RecruitSection }  from '@/components/landing/RecruitSection'
+import { Navbar }          from '@/components/navigation/Navbar'
+import { Footer }          from '@/components/layout/Footer'
+import { createClient }    from '@/lib/supabase/server'
 
 export default async function HomePage() {
   const supabase = await createClient()
@@ -43,6 +44,7 @@ export default async function HomePage() {
         <FeaturesSection />
         <RecruitSection />
       </main>
+      <Footer />
     </>
   )
 }
