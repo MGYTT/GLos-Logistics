@@ -10,10 +10,19 @@ const admin = adminClient(
   { auth: { persistSession: false } }
 )
 
+// ✅ Zwraca member.id z tabeli members (nie user.id z auth)
 async function getMemberId() {
   const sb = await createClient()
   const { data: { user } } = await sb.auth.getUser()
-  return user?.id ?? null
+  if (!user) return null
+
+  const { data: member } = await sb
+    .from('members')
+    .select('id')
+    .or(`id.eq.${user.id},auth_id.eq.${user.id}`)
+    .maybeSingle()
+
+  return member?.id ?? null
 }
 
 // ─── Pożyczki ──────────────────────────────────
@@ -53,8 +62,8 @@ export async function repayLoan(loanId: string) {
   const r = data as any
   if (!r.ok) {
     const msgs: Record<string, string> = {
-      loan_not_found:    'Pożyczka nie istnieje',
-      insufficient_funds:'Niewystarczające saldo VTC€',
+      loan_not_found:     'Pożyczka nie istnieje',
+      insufficient_funds: 'Niewystarczające saldo VTC€',
     }
     return { ok: false, error: msgs[r.error] ?? r.error }
   }

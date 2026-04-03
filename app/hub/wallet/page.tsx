@@ -10,7 +10,6 @@ export default async function WalletPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  // ✅ Szukaj member tak samo jak w /hub/page.tsx
   const { data: member } = await supabase
     .from('members')
     .select('id')
@@ -19,20 +18,20 @@ export default async function WalletPage() {
 
   if (!member) redirect('/apply')
 
-  const memberId = member.id  // ← używamy member.id, nie user.id
+  const memberId = member.id
 
   const [wallet, transactions, fuelPrice, loans, deposits] = await Promise.all([
     supabase
       .from('wallets')
       .select('*')
-      .eq('member_id', memberId)   // ✅ poprawione
-      .single()
+      .eq('member_id', memberId)
+      .maybeSingle()          // ✅ zamiast .single() — nie rzuca błędu
       .then(r => r.data),
 
     supabase
       .from('transactions')
       .select('*')
-      .eq('member_id', memberId)   // ✅ poprawione
+      .eq('member_id', memberId)
       .order('created_at', { ascending: false })
       .limit(50)
       .then(r => r.data ?? []),
@@ -44,20 +43,20 @@ export default async function WalletPage() {
       .gte('valid_until', new Date().toISOString())
       .order('valid_from', { ascending: false })
       .limit(1)
-      .single()
+      .maybeSingle()          // ✅ zamiast .single()
       .then(r => r.data),
 
     supabase
       .from('loans')
       .select('*')
-      .eq('member_id', memberId)   // ✅ poprawione
+      .eq('member_id', memberId)
       .eq('status', 'active')
       .then(r => r.data ?? []),
 
     supabase
       .from('deposits')
       .select('*')
-      .eq('member_id', memberId)   // ✅ poprawione
+      .eq('member_id', memberId)
       .eq('status', 'active')
       .then(r => r.data ?? []),
   ])
