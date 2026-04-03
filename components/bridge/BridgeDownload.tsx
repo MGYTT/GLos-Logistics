@@ -12,7 +12,7 @@ import {
 import { cn } from '@/lib/utils/cn'
 
 const BRIDGE_DOWNLOAD_URL =
-  'https://github.com/MGYTT/GLos-Logistics/releases/download/Glos/GLos-Logistics-Bridge-Setup-v6.0.0.exe'
+  'https://github.com/MGYTT/GLos-Logistics/releases/download/Glos/GLos-Logistics-Bridge-Setup-v6.1.0.exe'
 
 const FUNBIT_DOWNLOAD_URL =
   'https://github.com/Funbit/ets2-telemetry-server.git'
@@ -118,7 +118,7 @@ export function BridgeDownload({ member }: Props) {
             className="bg-amber-500 hover:bg-amber-400 text-black font-bold gap-1.5 h-8 text-xs"
           >
             <Download className="w-3.5 h-3.5" />
-            Pobierz Bridge v6.0
+            Pobierz Bridge v6.1.0
           </Button>
         </a>
       ),
@@ -126,7 +126,7 @@ export function BridgeDownload({ member }: Props) {
         <div className="flex items-start gap-2 mt-3 text-[11px] text-zinc-500 bg-amber-500/5 border border-amber-500/15 rounded-lg px-3 py-2.5">
           <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
           <span>
-            Pobierze się plik <span className="font-mono text-zinc-300">GLos-Logistics-Bridge-Setup-v6.0.0.exe</span> — uruchom go aby zainstalować aplikację.
+            Pobierze się plik <span className="font-mono text-zinc-300">GLos-Logistics-Bridge-Setup-v6.1.0.exe</span> — uruchom go aby zainstalować aplikację.
           </span>
         </div>
       ),
@@ -203,7 +203,7 @@ export function BridgeDownload({ member }: Props) {
         <div>
           <p className="text-sm font-black text-white">GLos Logistics Bridge</p>
           <p className="text-xs text-zinc-400 mt-0.5">
-            Wersja 6.0 • Windows x64 • Installer
+            Wersja 6.1.0 • Windows x64 • Installer
           </p>
         </div>
         <a href={BRIDGE_DOWNLOAD_URL} download>

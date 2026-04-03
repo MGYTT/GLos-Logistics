@@ -18,8 +18,9 @@ class Bridge {
     this.stats                 = { sent: 0, delivered: 0, errors: 0 }
     this._pendingDelivery      = null
     this._activeJobData        = null
-    // FIX: śledź maksymalny estimatedDistance — na początku trasy = cały dystans
     this._maxEstimatedDistance = 0
+    // FIX #2: śledź czy gra była rozłączona podczas pending
+    this._disconnectedDuring   = false
   }
 
   async start() {
@@ -35,7 +36,6 @@ class Bridge {
     this.emit('status', { type: 'stopped' })
   }
 
-  // FIX: Funbit nie ma plannedDistance — używaj max estimatedDistance z całej trasy
   _extractPlannedDistance() {
     if (this._maxEstimatedDistance > 500) {
       return Math.round(this._maxEstimatedDistance / 1000)
@@ -63,6 +63,7 @@ class Bridge {
   _resetJobState() {
     this._activeJobData        = null
     this._maxEstimatedDistance = 0
+    this._disconnectedDuring   = false
   }
 
   async _tick() {
@@ -87,6 +88,10 @@ class Bridge {
 
     if (!raw?.game?.connected) {
       this.emit('status', { type: 'waiting' })
+      // FIX #2: zaznacz że gra była rozłączona podczas pending delivery
+      if (this._pendingDelivery) {
+        this._disconnectedDuring = true
+      }
       await this._sendOffline()
       return
     }
@@ -96,13 +101,10 @@ class Bridge {
     const job    = raw.job
     const hasJob = !!(job?.sourceCity && job?.destinationCity)
     const jobKey = hasJob ? `${job.sourceCity}→${job.destinationCity}` : null
-    const prevKey = this.lastJobKey
 
-    // FIX: zbieraj max estimatedDistance podczas jazdy
-    // Na początku trasy estimatedDistance ≈ cały dystans — potem maleje
+    // Zbieraj max estimatedDistance
     if (hasJob && (raw.navigation?.estimatedDistance ?? 0) > 0) {
       const estM = raw.navigation.estimatedDistance
-      // Reset gdy nowy job
       if (this._activeJobData && jobKey !== this._activeJobData.jobKey) {
         this._maxEstimatedDistance = estM
       } else if (estM > this._maxEstimatedDistance) {
@@ -110,12 +112,10 @@ class Bridge {
       }
     }
 
-    // Aktualizuj _activeJobData podczas trasy
+    // Aktualizuj _activeJobData
     if (hasJob && job) {
       const currentIncome = (job.income ?? 0) > 0 ? job.income : null
-
       if (!this._activeJobData || jobKey !== this._activeJobData.jobKey) {
-        // Nowy job — zresetuj (maxEstimatedDistance już ustawiony powyżej)
         this._activeJobData = {
           jobKey,
           plannedKm: this._extractPlannedDistance(),
@@ -123,7 +123,6 @@ class Bridge {
           cargo:     raw.trailer?.name ?? raw.trailer?.id ?? null,
         }
       } else {
-        // Aktualizuj istniejący
         const current = this._extractPlannedDistance()
         if (current && current > (this._activeJobData.plannedKm ?? 0)) {
           this._activeJobData.plannedKm = current
@@ -133,51 +132,81 @@ class Bridge {
       }
     }
 
-    // ── Obsługa pending delivery ──────────────────────────
+    // ── Obsługa pending delivery ───────────────────────────
     if (this._pendingDelivery) {
       const elapsed = Date.now() - this._pendingDelivery.timestamp
 
+      // FIX #2: jeśli gra była rozłączona → to NIE jest delivery, to restart
+      // Anuluj pending, przywróć lastJobKey żeby nie tworzyć fałszywego completed
+      if (this._disconnectedDuring) {
+        if (hasJob && jobKey === this._pendingDelivery.jobKey) {
+          // Kierowca wrócił z tym samym joben → przywróć stan, nic nie zapisuj
+          this._pendingDelivery    = null
+          this._disconnectedDuring = false
+          this.lastJobKey          = jobKey
+          const payload = this._buildPayload(raw, 'none', null)
+          await this._sendPayload(payload, raw, 'none', jobKey)
+          return
+        }
+        // Inny job lub brak joba po reconnect → anuluj pending bez zapisu
+        this._pendingDelivery    = null
+        this._disconnectedDuring = false
+        this.lastJobKey          = hasJob ? jobKey : null
+        return
+      }
+
+      // Nowy job po dostarczeniu — FIX #1: wyślij delivered TYLKO tutaj
       if (hasJob && jobKey !== this._pendingDelivery.jobKey) {
         await this._fireDelivered(this._pendingDelivery, raw)
         this._pendingDelivery = null
-        this.lastJobKey = jobKey
+        this.lastJobKey       = jobKey
         const payload = this._buildPayload(raw, 'job_started', jobKey)
         await this._sendPayload(payload, raw, 'job_started', jobKey)
         return
       }
 
+      // Ten sam job wrócił w oknie grace — fałszywy trigger
       if (hasJob && jobKey === this._pendingDelivery.jobKey) {
         this._pendingDelivery = null
-        this.lastJobKey = jobKey
+        this.lastJobKey       = jobKey
         const payload = this._buildPayload(raw, 'none', null)
         await this._sendPayload(payload, raw, 'none', jobKey)
         return
       }
 
+      // Czekaj w oknie grace
       if (elapsed < DELIVERY_GRACE_MS) {
         const payload = this._buildPayload(raw, 'none', null)
         await this._sendPayload(payload, raw, 'none', null)
         return
       }
 
+      // Grace minął, gra połączona → prawdziwe dostarczenie
       if (raw?.game?.connected && raw?.truck) {
         await this._fireDelivered(this._pendingDelivery, raw)
       } else {
         this._fireCancelled(this._pendingDelivery.jobKey)
       }
-      this._pendingDelivery = null
-      this.lastJobKey = null
+      this._pendingDelivery    = null
+      this._disconnectedDuring = false
+      this.lastJobKey          = null
       return
     }
 
     // ── Normalna logika ────────────────────────────────────
-    let event = 'none'
+    const prevKey = this.lastJobKey
+    let event     = 'none'
 
     if (hasJob && jobKey !== this.lastJobKey && this.lastJobKey !== null) {
-      event = 'job_delivered'
+      // FIX #1: NIE wysyłaj job_delivered tutaj — użyj _pendingDelivery flow
+      // Bezpośrednia zmiana jobKey bez pending = edge case (TruckersMP teleport)
+      // Traktuj jako: stary job cancelled + nowy started
+      this._fireCancelled(this.lastJobKey)
+      event = 'job_started'
     } else if (hasJob && jobKey !== this.lastJobKey) {
       event = 'job_started'
     } else if (!hasJob && this.lastJobKey !== null) {
+      // Job zniknął → czekaj w pending
       this._pendingDelivery = {
         jobKey:    this.lastJobKey,
         timestamp: Date.now(),
@@ -211,7 +240,7 @@ class Bridge {
       if (res.status === 200 && res.body?.ok) {
         this.stats.sent++
         this.stats.delivered++
-        this._resetJobState()  // FIX: wyczyść też _maxEstimatedDistance
+        this._resetJobState()
         this.emit('job_event', { event: 'job_delivered', jobKey })
         this.emit('telemetry', {
           connected: true, hasJob: false, event: 'job_delivered',
@@ -234,7 +263,7 @@ class Bridge {
   }
 
   _fireCancelled(jobKey) {
-    this._resetJobState()  // FIX: wyczyść też _maxEstimatedDistance
+    this._resetJobState()
     this.emit('job_event', { event: 'job_cancelled', jobKey })
   }
 
@@ -284,7 +313,7 @@ class Bridge {
         this.emit('error', { type: 'auth', message: 'Nieprawidłowy klucz API' })
         this.stop()
       } else if (res.status === 403) {
-        this.emit('error', { type: 'banned', message: 'Konto zbanowane' })
+        this.emit('error', { type: 'banned', message: 'Konto zablokowane' })
         this.stop()
       } else {
         this.stats.errors++
@@ -297,8 +326,8 @@ class Bridge {
   }
 
   _buildPayloadDelivered(lastRaw, currentRaw, deliveredJob) {
-    const { game, truck: cTruck }                                            = currentRaw ?? {}
-    const { job: lJob, trailer: lTrailer, truck: lTruck }                   = lastRaw    ?? {}
+    const { game, truck: cTruck }                          = currentRaw ?? {}
+    const { job: lJob, trailer: lTrailer, truck: lTruck }  = lastRaw    ?? {}
 
     const placement = cTruck?.placement ?? {}
     const speedKmh  = this._extractSpeed(cTruck)
@@ -308,8 +337,6 @@ class Bridge {
       ? Math.max(0, Math.round(cTruck.fuelCapacity - cTruck.fuel))
       : null
 
-    // FIX: użyj _maxEstimatedDistance zebranego podczas jazdy
-    // _activeJobData.plannedKm jako backup
     const distKm =
       this._extractPlannedDistance() ??
       this._activeJobData?.plannedKm ??
@@ -332,8 +359,8 @@ class Bridge {
         x: placement.x ?? 0, y: placement.y ?? 0, z: placement.z ?? 0,
         speed: speedKmh, game_time: game?.time ?? null, online: true,
       },
-      active_job: null,
-      event: 'job_delivered',
+      active_job:    null,
+      event:         'job_delivered',
       delivered_job: {
         origin_city:      deliveredJob.origin_city,
         destination_city: deliveredJob.destination_city,
@@ -366,7 +393,6 @@ class Bridge {
       ? Math.max(0, Math.round(truck.fuelCapacity - truck.fuel))
       : null
 
-    // FIX: używaj _maxEstimatedDistance (cały dystans) jako job_max_distance
     const plannedKm = this._extractPlannedDistance()
     const remainKm  = navigation?.estimatedDistance
       ? Math.round(navigation.estimatedDistance / 1000)
@@ -387,16 +413,10 @@ class Bridge {
         fuel_used:        null,
         damage_percent:   damage,
       } : null,
-      event,
-      delivered_job: event === 'job_delivered' ? {
-        origin_city:      prevKey?.split('→')[0] ?? job?.sourceCity      ?? null,
-        destination_city: prevKey?.split('→')[1] ?? job?.destinationCity ?? null,
-        cargo:            trailer?.name ?? trailer?.id ?? null,
-        distance_km:      plannedKm,
-        income:           job?.income ?? null,
-        fuel_used:        fuelUsed,
-        damage_percent:   damage,
-      } : undefined,
+      // FIX #1: nigdy nie wysyłaj job_delivered przez _buildPayload
+      // delivery zawsze przez _fireDelivered() → brak duplikatów
+      event: event === 'job_delivered' ? 'none' : event,
+      delivered_job: undefined,
       telemetry: {
         has_job:               hasJob,
         from_city:             job?.sourceCity         ?? null,
@@ -406,12 +426,12 @@ class Bridge {
         cargo:                 trailer?.name           ?? null,
         cargo_weight_kg:       trailer?.mass           ?? null,
         income:                job?.income             ?? null,
-        job_max_distance:      plannedKm,    // cały dystans → fallback w API
-        distance_remaining_km: remainKm,     // pozostały dystans
-        truck_brand:           truck?.make   ?? null,
-        truck_model:           truck?.model  ?? null,
-        fuel_liters:           truck?.fuel   ?? null,
-        fuel_capacity:         truck?.fuelCapacity ?? null,
+        job_max_distance:      plannedKm,
+        distance_remaining_km: remainKm,
+        truck_brand:           truck?.make             ?? null,
+        truck_model:           truck?.model            ?? null,
+        fuel_liters:           truck?.fuel             ?? null,
+        fuel_capacity:         truck?.fuelCapacity     ?? null,
         damage_percent:        damage,
       },
     }

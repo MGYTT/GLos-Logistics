@@ -241,3 +241,71 @@ html, body {
 ::-webkit-scrollbar       { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+/* ── Update banner ── */
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  background: #1a2a1a;
+  border-bottom: 1px solid #2d5a2d;
+  font-size: 12px;
+  color: #7ecf7e;
+  min-height: 34px;
+}
+
+.update-banner.downloading {
+  background: #1a2018;
+  border-bottom-color: #4a5a2d;
+  color: var(--amber);
+}
+
+.update-banner.ready {
+  background: #1a2a1a;
+  border-bottom-color: #22c55e55;
+  color: #7ecf7e;
+}
+
+.update-icon { font-size: 13px; flex-shrink: 0; }
+
+.update-text { flex: 1; font-weight: 600; }
+
+/* Pasek postępu pobierania */
+.update-progress {
+  width: 80px;
+  height: 4px;
+  background: #2a3a2a;
+  border-radius: 2px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.update-progress-bar {
+  height: 100%;
+  width: 0%;
+  background: var(--amber);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.update-btn {
+  padding: 4px 10px;
+  background: #22c55e;
+  color: #000;
+  border: none;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.update-btn:hover { background: #4ade80; }
+
+/* Korekta wysokości .app gdy banner widoczny */
+.update-banner:not(.hidden) ~ .app {
+  height: calc(640px - 34px);
+}

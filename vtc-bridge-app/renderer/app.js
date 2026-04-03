@@ -244,5 +244,35 @@ $('btn-minimize').addEventListener('click', () => window.vtc.minimize())
 $('btn-hide').addEventListener('click',     () => window.vtc.hide())
 $('btn-close').addEventListener('click',    () => window.vtc.close())
 
+// ─── Auto-updater UI ──────────────────────────
+window.vtc.onUpdateEvent((event, data) => {
+  if (event !== 'update:status') return
+
+  const banner  = $('update-banner')
+  const bannerText = $('update-banner-text')
+  const bannerBtn  = $('update-banner-btn')
+  if (!banner) return
+
+  if (data.type === 'available') {
+    bannerText.textContent   = `⬇️  Pobieranie v${data.version}...`
+    bannerBtn.style.display  = 'none'
+    banner.style.display     = 'flex'
+    addLog(`🔄 Aktualizacja v${data.version} — pobieranie w tle...`, 'ok')
+  }
+
+  if (data.type === 'downloaded') {
+    bannerText.textContent   = `✅  v${data.version} gotowa do instalacji`
+    bannerBtn.style.display  = 'inline-block'
+    banner.style.display     = 'flex'
+    bannerBtn.onclick        = () => window.vtc.installUpdate()
+    addLog(`✅ Aktualizacja v${data.version} pobrana — kliknij "Zainstaluj"`, 'ok')
+  }
+})
+
+window.vtc.onUpdateEvent((event, data) => {
+  if (event !== 'update:progress') return
+  addLog(`⬇️  Pobieranie: ${data.percent}% (${data.speedKBs} KB/s)`, '')
+})
+
 // ─── Start ────────────────────────────────────
 init()

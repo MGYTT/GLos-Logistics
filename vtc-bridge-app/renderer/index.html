@@ -14,13 +14,25 @@
     <div class="titlebar-left">
       <div class="titlebar-logo">🚛</div>
       <span class="titlebar-title">GLos Logistics Bridge</span>
-      <span class="titlebar-version">v6.0</span>
+      <span class="titlebar-version">v6.1</span>
     </div>
     <div class="titlebar-controls">
       <button class="btn-titlebar" id="btn-minimize" title="Minimalizuj">─</button>
       <button class="btn-titlebar" id="btn-hide"     title="Do tray">⊡</button>
       <button class="btn-titlebar btn-close" id="btn-close" title="Zamknij">✕</button>
     </div>
+  </div>
+
+  <!-- Update banner — schowany domyślnie -->
+  <div class="update-banner hidden" id="update-banner">
+    <span class="update-icon" id="update-icon">⬇️</span>
+    <span class="update-text" id="update-banner-text">Sprawdzanie aktualizacji...</span>
+    <div class="update-progress hidden" id="update-progress-wrap">
+      <div class="update-progress-bar" id="update-progress-bar"></div>
+    </div>
+    <button class="update-btn hidden" id="update-banner-btn">
+      Zainstaluj i uruchom ponownie
+    </button>
   </div>
 
   <!-- Główna zawartość -->

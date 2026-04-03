@@ -4,10 +4,11 @@ const {
   app, BrowserWindow, ipcMain,
   shell, Tray, Menu, nativeImage,
 } = require('electron')
-const path   = require('path')
-const Bridge = require('./src/bridge')
-const Config = require('./src/config')
-const Verify = require('./src/verify')
+const path    = require('path')
+const Bridge  = require('./src/bridge')
+const Config  = require('./src/config')
+const Verify  = require('./src/verify')
+const { initUpdater, installUpdate, checkNow } = require('./src/updater')
 
 let mainWindow = null
 let tray       = null
@@ -19,7 +20,7 @@ function createWindow() {
     width:           480,
     height:          680,
     resizable:       false,
-    frame:           false,       // własny titlebar
+    frame:           false,
     transparent:     false,
     backgroundColor: '#0f0f0f',
     icon:            path.join(__dirname, 'assets', 'icon.ico'),
@@ -33,7 +34,6 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'))
 
   mainWindow.on('close', (e) => {
-    // Minimalizuj do tray zamiast zamykać
     if (!app.isQuiting) {
       e.preventDefault()
       mainWindow.hide()
@@ -58,23 +58,19 @@ function createTray() {
 
 function updateTrayMenu(isRunning) {
   const menu = Menu.buildFromTemplate([
+    { label: 'GLos Logistics Bridge', enabled: false },
+    { type: 'separator' },
+    { label: isRunning ? '🟢 Bridge aktywny' : '🔴 Bridge zatrzymany', enabled: false },
+    { type: 'separator' },
+    { label: 'Pokaż okno',  click: () => mainWindow?.show() },
     {
-      label:   'GLos Logistics Bridge',
-      enabled: false,
+      label: isRunning ? 'Zatrzymaj Bridge' : 'Uruchom Bridge',
+      click: () => mainWindow?.webContents.send('tray:toggle'),
     },
     { type: 'separator' },
     {
-      label:   isRunning ? '🟢 Bridge aktywny' : '🔴 Bridge zatrzymany',
-      enabled: false,
-    },
-    { type: 'separator' },
-    {
-      label: 'Pokaż okno',
-      click: () => mainWindow?.show(),
-    },
-    {
-      label:   isRunning ? 'Zatrzymaj Bridge' : 'Uruchom Bridge',
-      click:   () => mainWindow?.webContents.send('tray:toggle'),
+      label: 'Sprawdź aktualizacje',
+      click: () => checkNow().catch(() => {}),
     },
     { type: 'separator' },
     {
@@ -94,35 +90,27 @@ function updateTrayMenu(isRunning) {
 app.whenReady().then(() => {
   createWindow()
   createTray()
+
+  // Auto-updater — startuje po załadowaniu okna
+  initUpdater((event, data) => {
+    mainWindow?.webContents.send('update:event', event, data)
+  })
 })
 
 app.on('window-all-closed', (e) => {
-  e.preventDefault() // nie zamykaj — żyje w tray
+  e.preventDefault()
 })
 
 // ─── IPC Handlers ─────────────────────────────
 
-// Wczytaj config
-ipcMain.handle('config:load', () => {
-  return Config.load()
-})
+ipcMain.handle('config:load', () => Config.load())
+ipcMain.handle('config:save', (_, data) => Config.save(data))
+ipcMain.handle('config:delete', () => Config.remove())
 
-// Zapisz config
-ipcMain.handle('config:save', (_, data) => {
-  return Config.save(data)
-})
-
-// Usuń config (reset)
-ipcMain.handle('config:delete', () => {
-  return Config.remove()
-})
-
-// Weryfikuj klucz API
 ipcMain.handle('verify:key', async (_, serverUrl, apiKey) => {
   return Verify.verify(serverUrl, apiKey)
 })
 
-// Start bridge
 ipcMain.handle('bridge:start', async () => {
   const cfg = Config.load()
   if (!cfg) return { ok: false, error: 'Brak konfiguracji' }
@@ -136,7 +124,6 @@ ipcMain.handle('bridge:start', async () => {
   return { ok: true }
 })
 
-// Stop bridge
 ipcMain.handle('bridge:stop', async () => {
   bridge?.stop()
   bridge = null
@@ -144,12 +131,18 @@ ipcMain.handle('bridge:stop', async () => {
   return { ok: true }
 })
 
-// Otwórz link w przeglądarce
-ipcMain.on('open:url', (_, url) => {
-  shell.openExternal(url)
+// Updater IPC
+ipcMain.handle('update:check', async () => {
+  try   { await checkNow(); return { ok: true } }
+  catch { return { ok: false } }
 })
 
-// Kontrolki okna
+ipcMain.handle('update:install', () => {
+  installUpdate()
+})
+
+ipcMain.on('open:url', (_, url) => shell.openExternal(url))
+
 ipcMain.on('window:minimize', () => mainWindow?.minimize())
 ipcMain.on('window:hide',     () => mainWindow?.hide())
 ipcMain.on('window:close',    () => {
