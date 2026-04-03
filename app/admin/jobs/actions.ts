@@ -15,11 +15,12 @@ async function assertAdmin() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) throw new Error('Unauthorized')
 
+  // ✅ poprawione: szukaj po id LUB auth_id
   const { data: member } = await supabase
     .from('members')
     .select('rank')
-    .eq('id', user.id)
-    .single()
+    .or(`id.eq.${user.id},auth_id.eq.${user.id}`)
+    .maybeSingle()
 
   if (!['Owner', 'Manager'].includes(member?.rank ?? ''))
     throw new Error('Forbidden')
@@ -57,14 +58,14 @@ export async function deleteJobs(ids: string[]): Promise<{ ok: boolean; error?: 
 export async function updateJob(
   jobId: string,
   patch: {
-    cargo?:          string
-    origin_city?:    string
+    cargo?:            string
+    origin_city?:      string
     destination_city?: string
-    distance_km?:    number
-    income?:         number
-    damage_percent?: number
-    status?:         string
-    notes?:          string
+    distance_km?:      number
+    income?:           number
+    damage_percent?:   number
+    status?:           string
+    notes?:            string
   }
 ): Promise<{ ok: boolean; error?: string }> {
   try {

@@ -15,8 +15,17 @@ export async function buyItem(itemId: string) {
   const { data: { user } } = await authClient.auth.getUser()
   if (!user) return { ok: false, error: 'Nie jesteś zalogowany' }
 
+  // ✅ pobierz member.id zamiast używać user.id
+  const { data: member } = await authClient
+    .from('members')
+    .select('id')
+    .or(`id.eq.${user.id},auth_id.eq.${user.id}`)
+    .maybeSingle()
+
+  if (!member) return { ok: false, error: 'Nie znaleziono profilu kierowcy' }
+
   const { data, error } = await supabase.rpc('purchase_shop_item', {
-    p_member_id: user.id,
+    p_member_id: member.id,  // ✅ poprawione
     p_item_id:   itemId,
   })
 
@@ -26,9 +35,9 @@ export async function buyItem(itemId: string) {
 
   if (!result.ok) {
     const msg: Record<string, string> = {
-      item_not_found:    'Przedmiot nie istnieje',
-      out_of_stock:      'Brak w magazynie',
-      insufficient_funds:'Niewystarczające saldo VTC€',
+      item_not_found:     'Przedmiot nie istnieje',
+      out_of_stock:       'Brak w magazynie',
+      insufficient_funds: 'Niewystarczające saldo VTC€',
     }
     return { ok: false, error: msg[result.error!] ?? result.error }
   }
